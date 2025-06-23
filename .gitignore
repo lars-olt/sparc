@@ -1,0 +1,6 @@
+/results
+/sparc
+*__pycache__
+*.venv*
+uv.lock
+src/sparc.egg-info
