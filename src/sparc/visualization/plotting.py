@@ -5,24 +5,23 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from typing import Optional, List
 
-from ..core.constants import WLS, COLORS, MARKERS
+from ..core.constants import WAVELENGTHS, COLORS, PLOT_MARKERS
 
-
-def plot_roi_image(img: np.ndarray, 
-                  rois: np.ndarray, 
-                  ax: Optional[plt.Axes] = None,
-                  show: bool = True) -> plt.Figure:
+def plot_rois_on_image(img: np.ndarray,
+                       rois: np.ndarray,
+                       ax: Optional[plt.Axes] = None,
+                       show: bool = True) -> plt.Figure:
     """
-    Plot ROI rectangles overlaid on an image.
+    Plot ROI rectangles overlaid on image.
     
     Args:
         img: RGB image to display
-        rois: Array of ROI coordinates in (x, y, width, height) format
-        ax: Optional matplotlib axes to plot on
-        show: Whether to display the plot
+        rois: Array of ROI coordinates (x, y, width, height)
+        ax: Optional axes to plot on
+        show: Whether to display plot
         
     Returns:
-        matplotlib Figure object
+        matplotlib Figure
     """
     if ax is None:
         fig, ax = plt.subplots(figsize=(12, 9))
@@ -32,131 +31,107 @@ def plot_roi_image(img: np.ndarray,
     
     ax.set_axis_off()
     ax.imshow(img)
-
-    color_i = 0
-    for (x, y, w, h) in rois:
-        # Cycle through colors
-        if color_i == len(COLORS):
-            color_i = 0
-        curr_color = COLORS[color_i]
-        color_i += 1
-
-        # Add ROI rectangle (original expects x, y, width, height format)
-        roi = patches.Rectangle(
-            (x, y), w, h, 
-            edgecolor=curr_color, 
-            facecolor="none", 
+    
+    for i, (x, y, width, height) in enumerate(rois):
+        color = COLORS[i % len(COLORS)]
+        
+        rectangle = patches.Rectangle(
+            (x, y), width, height,
+            edgecolor=color,
+            facecolor="none",
             linewidth=2
         )
-        ax.add_patch(roi)
-
+        ax.add_patch(rectangle)
+    
     if show:
         plt.show()
-        
+    
     return fig
 
 
-def plot_spectra(spectra: np.ndarray, 
-                stds: np.ndarray, 
-                ax: Optional[plt.Axes] = None,
-                colors: List[str] = COLORS,
-                show: bool = True) -> plt.Figure:
+def plot_spectra_with_error(spectra: np.ndarray,
+                           stds: np.ndarray,
+                           ax: Optional[plt.Axes] = None,
+                           colors: List[str] = COLORS,
+                           show: bool = True) -> plt.Figure:
     """
-    Plot averaged spectra with error bars.
+    Plot spectra with error bars.
     
     Args:
         spectra: Array of spectra to plot
         stds: Standard deviations for error bars
-        ax: Optional matplotlib axes to plot on
+        ax: Optional axes to plot on
         colors: List of colors to cycle through
-        show: Whether to display the plot
+        show: Whether to display plot
         
     Returns:
-        matplotlib Figure object
+        matplotlib Figure
     """
     if ax is None:
-        fig = plt.figure(figsize=(7, 7))
-        ax = fig.gca()
+        fig, ax = plt.subplots(figsize=(7, 7))
     else:
         fig = ax.get_figure()
-
-    # Sort wavelengths for proper plotting
-    bayer_sorted_indices = np.argsort(WLS[:3])
-    non_bayer_sorted_indices = np.argsort(WLS[3:]) + 3
-
-    color_i = 0
-    marker_i = 0
+    
+    bayer_sorted = np.argsort(WAVELENGTHS[:3])
+    non_bayer_sorted = np.argsort(WAVELENGTHS[3:]) + 3
     
     for i, spectrum in enumerate(spectra):
-        # Cycle colors if needed
-        if color_i == len(colors):
-            color_i = 0
-
-        # Cycle markers if needed
-        if marker_i == len(MARKERS):
-            marker_i = 0
-
-        curr_color = colors[color_i]
-
+        color = colors[i % len(colors)]
+        marker = PLOT_MARKERS[i % len(PLOT_MARKERS)]
+        
         # Plot non-Bayer bands with error bars
-        nb_wls = np.array(WLS)[non_bayer_sorted_indices]
-        nb_data = spectrum[non_bayer_sorted_indices]
+        nb_wls = np.array(WAVELENGTHS)[non_bayer_sorted]
+        nb_data = spectrum[non_bayer_sorted]
+        nb_std = stds[i][non_bayer_sorted]
+        
         ax.errorbar(
-            nb_wls,
-            nb_data,
-            yerr=stds[i][non_bayer_sorted_indices],
+            nb_wls, nb_data,
+            yerr=nb_std,
             fmt="-",
-            ecolor=curr_color,
+            ecolor=color,
             capsize=3,
-            color=curr_color
+            color=color
         )
-
+        
         # Plot Bayer bands as points
-        b_wls = np.array(WLS)[bayer_sorted_indices]
-        b_data = spectrum[bayer_sorted_indices]
-        ax.plot(b_wls, b_data, "+", color=curr_color)
-
-        color_i += 1
-        marker_i += 1
-
+        b_wls = np.array(WAVELENGTHS)[bayer_sorted]
+        b_data = spectrum[bayer_sorted]
+        ax.plot(b_wls, b_data, "+", color=color)
+    
     ax.set_xlabel("Wavelength (nm)")
     ax.set_ylabel("R* = IOF/cos(θ)")
     
     if show:
         plt.show()
-        
+    
     return fig
 
 
-def plot_clustering_results(spectra: np.ndarray,
-                          labels: np.ndarray,
-                          title: str = "Spectral Clustering Results",
-                          show: bool = True) -> plt.Figure:
+def plot_clustering(spectra: np.ndarray,
+                   labels: np.ndarray,
+                   title: str = "Spectral Clustering",
+                   show: bool = True) -> plt.Figure:
     """
     Plot spectra colored by cluster assignment.
     
     Args:
         spectra: Array of spectra
-        labels: Cluster labels for each spectrum
+        labels: Cluster labels
         title: Plot title
-        show: Whether to display the plot
+        show: Whether to display plot
         
     Returns:
-        matplotlib Figure object
+        matplotlib Figure
     """
     fig, ax = plt.subplots(figsize=(10, 6))
     
-    # Use wavelengths for x-axis
-    wavelengths = np.array(WLS[3:])  # Non-Bayer wavelengths
+    wavelengths = np.array(WAVELENGTHS[3:])
     sorted_indices = np.argsort(wavelengths)
     sorted_wls = wavelengths[sorted_indices]
     
-    # Plot each spectrum colored by cluster
-    unique_labels = np.unique(labels)
-    for i, label in enumerate(unique_labels):
+    for i, label in enumerate(np.unique(labels)):
         mask = labels == label
         cluster_spectra = spectra[mask]
-        
         color = COLORS[i % len(COLORS)]
         
         for spectrum in cluster_spectra:
@@ -170,59 +145,62 @@ def plot_clustering_results(spectra: np.ndarray,
     
     if show:
         plt.show()
-        
+    
     return fig
 
 
-def plot_pipeline_summary(sparc_instance, show: bool = True) -> plt.Figure:
+def create_summary_plot(result_dict: dict, show: bool = True) -> plt.Figure:
     """
-    Create a summary plot showing the complete SPARC pipeline results.
+    Create summary plot showing complete pipeline results.
     
     Args:
-        sparc_instance: SPARC class instance with completed pipeline
-        show: Whether to display the plot
+        result_dict: Dictionary containing pipeline results
+        show: Whether to display plot
         
     Returns:
-        matplotlib Figure object
+        matplotlib Figure
     """
     fig, axes = plt.subplots(2, 2, figsize=(15, 12))
     
     # Original image
-    axes[0, 0].imshow(sparc_instance.load_result['rgb_img'])
+    axes[0, 0].imshow(result_dict['rgb_img'])
     axes[0, 0].set_title("Original RGB Image")
     axes[0, 0].set_axis_off()
     
     # Segmentation
-    axes[0, 1].imshow(sparc_instance.segments, cmap='tab20')
-    axes[0, 1].set_title("SAM Segmentation")
+    axes[0, 1].imshow(result_dict['segments'], cmap='tab20')
+    axes[0, 1].set_title(f"Segmentation ({result_dict['n_segments']} segments)")
     axes[0, 1].set_axis_off()
     
     # Final ROIs
-    plot_roi_image(
-        sparc_instance.load_result['rgb_img'], 
-        sparc_instance.final_rois, 
+    plot_rois_on_image(
+        result_dict['rgb_img'],
+        result_dict['final_rois'],
         ax=axes[1, 0],
         show=False
     )
-    axes[1, 0].set_title("Selected ROIs")
+    axes[1, 0].set_title(f"Selected ROIs ({len(result_dict['final_rois'])})")
     
     # Final spectra
-    if sparc_instance.roi_indices is not None:
-        if len(sparc_instance.roi_spectra[sparc_instance.outlier_mask]) > 3:
-            outlier_spectra = sparc_instance.roi_spectra[sparc_instance.outlier_mask]
-            outlier_stds = sparc_instance.roi_stds[sparc_instance.outlier_mask]
-            final_spectra = outlier_spectra[sparc_instance.roi_indices]
-            final_stds = outlier_stds[sparc_instance.roi_indices]
-        else:
-            final_spectra = sparc_instance.roi_spectra[sparc_instance.roi_indices]
-            final_stds = sparc_instance.roi_stds[sparc_instance.roi_indices]
-        
-        plot_spectra(final_spectra, final_stds, ax=axes[1, 1], show=False)
-        axes[1, 1].set_title("Final Spectra")
+    if 'final_spectra' in result_dict and 'final_stds' in result_dict:
+        plot_spectra_with_error(
+            result_dict['final_spectra'],
+            result_dict['final_stds'],
+            ax=axes[1, 1],
+            show=False
+        )
+        axes[1, 1].set_title(f"Final Spectra ({len(result_dict['final_spectra'])} clusters)")
     
     plt.tight_layout()
     
     if show:
         plt.show()
-        
+    
     return fig
+
+
+# Aliases for backward compatibility
+plot_roi_image = plot_rois_on_image
+plot_spectra = plot_spectra_with_error
+plot_clustering_results = plot_clustering
+plot_pipeline_summary = create_summary_plot

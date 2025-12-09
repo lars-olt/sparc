@@ -1,23 +1,57 @@
-"""Utility functions."""
+"""SPARC utilities module - Array operations, geometry, and threading."""
 
-from .geometry import get_center_of_mass, largest_rect_around_center, get_roi
-from .array_ops import mask_cube, apply_kmeans_to_masked, normalize_cube
-from .io import (save_sparc_results, load_sparc_results, export_rois_to_csv, SparcExporter)
-from .threading import SafeKMeans, configure_threading, suppress_kmeans_warnings, force_fix_kmeans_warnings
+from .array_ops import (
+    mask_cube,
+    uncompress_cube,
+    apply_kmeans_to_masked,
+    normalize_cube,
+    normalize_minmax,
+    normalize_zscore,
+    normalize_l2,
+    compute_spectral_statistics,
+)
+from .geometry import (
+    find_center_of_mass,
+    find_largest_rectangle,
+    check_rectangle_valid,
+    extract_roi,
+    create_edge_mask,
+    convert_to_plot_coords,
+    create_rgb_image,
+    # Backward compatibility aliases
+    get_edge_mask,
+    get_roi,
+    rect_to_plot_coords,
+    get_rgb_stretch,
+)
+from .threading import (
+    SafeKMeans,
+)
 
 __all__ = [
-    'get_center_of_mass', 
-    'largest_rect_around_center', 
-    'get_roi',
-    'mask_cube', 
-    'apply_kmeans_to_masked', 
+    # Array operations
+    'mask_cube',
+    'uncompress_cube',
+    'apply_kmeans_to_masked',
     'normalize_cube',
-    'save_sparc_results',
-    'load_sparc_results',
-    'export_rois_to_csv',
-    'SparcExporter',
+    'normalize_minmax',
+    'normalize_zscore',
+    'normalize_l2',
+    'compute_spectral_statistics',
+    
+    # Geometry
+    'find_center_of_mass',
+    'find_largest_rectangle',
+    'check_rectangle_valid',
+    'extract_roi',
+    'create_edge_mask',
+    'convert_to_plot_coords',
+    'create_rgb_image',
+    'get_edge_mask',  # Alias
+    'get_roi',  # Alias
+    'rect_to_plot_coords',  # Alias
+    'get_rgb_stretch',  # Alias
+    
+    # Threading
     'SafeKMeans',
-    'configure_threading',
-    'suppress_kmeans_warnings',
-    'force_fix_kmeans_warnings'
 ]

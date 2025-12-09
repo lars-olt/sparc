@@ -10,224 +10,246 @@ from asdf.zcam_bandset import ZcamBandSet
 import asdf_settings.metadata
 from asdf_settings import rapidlooks
 
-from ..core.constants import SHARED_BANDS, BAD_FLAGS
-from ..utils.geometry import get_rgb_stretch
-
-
-# -----------------------------------------------------------------------------
-# Huge thanks to Michael St. Clair (@m-stclair) for loading functionality!
-# -----------------------------------------------------------------------------
+from ..core.constants import SHARED_BANDS, BAD_PIXEL_FLAGS
 
 
 class LoadResult(TypedDict):
-    """Type definition for cube loading result."""
-
+    """Result from loading hyperspectral cube."""
     cube: np.ndarray
+    left_cube: np.ndarray
+    right_cube: np.ndarray
+    left_cube_aligned: np.ndarray
     base_bands: Dict[str, np.ndarray]
     bandset: ZcamBandSet
-    homography_tmask: np.ndarray
+    homography_mask: np.ndarray
     rgb_img: np.ndarray
+    left_rgb_img: np.ndarray
+    right_rgb_img: np.ndarray
     id: str
 
 
-# Constants for pixel mapping
-BAD_PIXMAP_VALUES = tuple(
-    i + 1
-    for i, f in enumerate(asdf_settings.metadata.PIXEL_FLAG_NAMES)
-    if f in BAD_FLAGS
+BAD_PIXEL_VALUES = tuple(
+    i + 1 for i, flag in enumerate(asdf_settings.metadata.PIXEL_FLAG_NAMES)
+    if flag in BAD_PIXEL_FLAGS
 )
+
 ZCAM_CROP = rapidlooks.CROP_SETTINGS["crop"]
 
 
-def load_cube(
-    iof_path: str,
-    seq_id: Optional[str],
-    obs_ix: int,
-    do_apply_pixmaps: bool,
-    ignore_bayers: bool,
-) -> LoadResult:
+def load_cube(iof_path: str,
+              seq_id: Optional[str],
+              obs_ix: int,
+              do_apply_pixmaps: bool,
+              ignore_bayers: bool) -> LoadResult:
     """
-    Load hyperspectral data cube from IOF files.
-
+    Load and align hyperspectral data from left and right ZCAM cameras.
+    
     Args:
         iof_path: Path to IOF data directory
         seq_id: Sequence ID (optional)
         obs_ix: Observation index
-        do_apply_pixmaps: Whether to apply pixel maps for bad pixel correction
-        ignore_bayers: Whether to ignore Bayer filter bands
-
+        do_apply_pixmaps: Apply pixel maps for bad pixel correction
+        ignore_bayers: Ignore Bayer filter bands
+        
     Returns:
-        LoadResult containing loaded data and metadata
+        LoadResult with aligned cube and metadata
     """
-    cube = []
-
-    # Load left and right data cubes
     search_path = Path(iof_path)
-
-    bs = get_zcam_bandset(search_path, seq_id=seq_id, observation_ix=obs_ix, load=False)
-
-    # Get unique id of observation
-    scene_id = bs.name
-
-    filts = bs.metadata["BAND"].sort_values()
+    bandset = get_zcam_bandset(search_path, seq_id=seq_id, observation_ix=obs_ix, load=False)
+    scene_id = bandset.name
+    
+    filters = bandset.metadata["BAND"].sort_values()
     if ignore_bayers:
-        filts = filts.loc[~filts.str.contains("0")].reset_index()
-
-    bs.load("all")
-    bs.bulk_debayer("all")
-    base_bands = {b: crop(bs.get_band(b), ZCAM_CROP).copy() for b in filts}
-
+        filters = filters.loc[~filters.str.contains("0")].reset_index()
+    
+    bandset.load("all")
+    bandset.bulk_debayer("all")
+    base_bands = {b: crop(bandset.get_band(b), ZCAM_CROP).copy() for b in filters}
+    
     if do_apply_pixmaps:
         pixmaps = {
-            b: crop(bs.pixmaps[b], ZCAM_CROP).copy()
-            for b in sorted(bs.metadata["FILTER"].unique())
+            b: crop(bandset.pixmaps[b], ZCAM_CROP).copy()
+            for b in sorted(bandset.metadata["FILTER"].unique())
         }
-        # Apply pixel maps to mask bad pixels
-        bands = apply_pixmaps(base_bands, pixmaps)
+        bands = apply_pixel_masks(base_bands, pixmaps)
     else:
         bands = base_bands
-
-    l_cube = np.array([a for b, a in bands.items() if b.startswith("L")])
-    r_cube = np.array([a for b, a in bands.items() if b.startswith("R")])
-
-    # Store RGB image of scene (used for segmentation)
-    rgb_img = get_rgb_stretch(r_cube)
-
-    # Compute homography using original bands (NaNs make SIFT unhappy)
-    h_matrix = compute_homography(
-        base_bands[SHARED_BANDS["L"]], base_bands[SHARED_BANDS["R"]]
+    
+    left_cube = np.array([a for b, a in bands.items() if b.startswith("L")])
+    right_cube = np.array([a for b, a in bands.items() if b.startswith("R")])
+    
+    # Create RGB images for left and right separately
+    left_rgb_img = create_rgb_stretch(left_cube)
+    right_rgb_img = create_rgb_stretch(right_cube)
+    
+    homography_matrix = compute_homography(
+        base_bands[SHARED_BANDS["L"]],
+        base_bands[SHARED_BANDS["R"]]
     )
-    l_cube_mapped = apply_homography(l_cube, h_matrix, r_cube[0].shape)
-
-    # Get index of last shared band between left/right cameras
-    last_shared_band_index = sorted(bs.raw).index(SHARED_BANDS["L"])
-
-    # Create mask for homography transformation areas
-    homography_tmask = np.array(l_cube_mapped[last_shared_band_index] == 0)
-
-    # Average bands shared between left/right cameras (Bayer + 800nm)
-    for band in range(last_shared_band_index + 1):
-        band_avg = (l_cube_mapped[band] + r_cube[band]) / 2
-        cube.append(band_avg)
-
-    # Store left bands
-    l_num_bands = l_cube.shape[0]
-    for band in range(last_shared_band_index + 1, l_num_bands):
-        cube.append(l_cube_mapped[band])
-
-    # Store right bands
-    r_num_bands = r_cube.shape[0]
-    for band in range(last_shared_band_index + 1, r_num_bands):
-        cube.append(r_cube[band])
-
+    left_cube_aligned = apply_homography(left_cube, homography_matrix, right_cube[0].shape)
+    
+    last_shared_index = sorted(bandset.raw).index(SHARED_BANDS['L'])
+    homography_mask = np.array(left_cube_aligned[last_shared_index] == 0)
+    
+    aligned_cube = merge_left_right_cubes(left_cube_aligned, right_cube, last_shared_index)
+    
     return {
-        "cube": np.array(cube),
-        "base_bands": base_bands,
-        "bandset": bs,
-        "homography_tmask": homography_tmask,
-        "rgb_img": rgb_img,
-        "id": scene_id,
+        'cube': aligned_cube,
+        'left_cube': left_cube,
+        'right_cube': right_cube,
+        'left_cube_aligned': left_cube_aligned,
+        'base_bands': base_bands,
+        'bandset': bandset,
+        'homography_mask': homography_mask,
+        'rgb_img': right_rgb_img,  # Use right as default
+        'left_rgb_img': left_rgb_img,
+        'right_rgb_img': right_rgb_img,
+        'id': scene_id
     }
 
 
-def apply_homography(
-    src_cube: np.ndarray, hmat: np.ndarray, shape: tuple[int, int]
-) -> np.ndarray:
+def merge_left_right_cubes(left_cube: np.ndarray,
+                           right_cube: np.ndarray,
+                           last_shared_index: int) -> np.ndarray:
     """
-    Apply homography transformation to align left camera with right camera.
-
-    Note: This approach is not robust to parallax.
-    TODO: really need to fix this... eventually.
-
+    Merge left and right camera cubes, averaging shared bands.
+    
     Args:
-        src_cube: Source cube to transform
-        hmat: Homography matrix
-        shape: Target shape
+        left_cube: Aligned left camera cube
+        right_cube: Right camera cube
+        last_shared_index: Index of last band shared between cameras
+        
+    Returns:
+        Merged hyperspectral cube
+    """
+    cube = []
+    
+    # Average shared bands
+    for band in range(last_shared_index + 1):
+        band_avg = (left_cube[band] + right_cube[band]) / 2
+        cube.append(band_avg)
+    
+    # Add unique left bands
+    for band in range(last_shared_index + 1, left_cube.shape[0]):
+        cube.append(left_cube[band])
+    
+    # Add unique right bands
+    for band in range(last_shared_index + 1, right_cube.shape[0]):
+        cube.append(right_cube[band])
+    
+    return np.array(cube)
 
+
+def apply_homography(source_cube: np.ndarray,
+                    homography_matrix: np.ndarray,
+                    target_shape: tuple) -> np.ndarray:
+    """
+    Apply homography transformation to align left camera with right.
+    
+    Note: This approach is not robust to parallax.
+    
+    Args:
+        source_cube: Cube to transform
+        homography_matrix: Homography transformation matrix
+        target_shape: Target image shape (height, width)
+        
     Returns:
         Transformed cube
     """
-    cube_transformed = []
-    for band in range(src_cube.shape[0]):
-        spec_slice = src_cube[band]
-        warped_img = cv2.warpPerspective(spec_slice, hmat, (shape[1], shape[0]))
-        cube_transformed.append(warped_img)
-    return np.array(cube_transformed)
+    transformed = []
+    for band in range(source_cube.shape[0]):
+        warped = cv2.warpPerspective(
+            source_cube[band],
+            homography_matrix,
+            (target_shape[1], target_shape[0])
+        )
+        transformed.append(warped)
+    return np.array(transformed)
 
 
-def compute_homography(
-    src: np.ndarray, dst: np.ndarray, prestretch: int = 1
-) -> np.ndarray:
+def compute_homography(source: np.ndarray,
+                      destination: np.ndarray,
+                      prestretch: int = 1) -> np.ndarray:
     """
-    Compute homography matrix that maps src to dst using SIFT features.
-
+    Compute homography matrix using SIFT feature matching.
+    
     Args:
-        src: Source 2D array
-        dst: Destination 2D array
+        source: Source 2D image
+        destination: Destination 2D image
         prestretch: Pre-stretch factor for 8-bit conversion
-
+        
     Returns:
-        Homography matrix
+        3x3 homography matrix
     """
-    src, dst = map(lambda a: eightbit(a, prestretch), (src, dst))
-
-    # Detect features and compute descriptors
+    source_8bit = eightbit(source, prestretch)
+    dest_8bit = eightbit(destination, prestretch)
+    
     sift = cv2.SIFT_create()
-    src_keypoints, src_descriptors = sift.detectAndCompute(src, None)
-    dst_keypoints, dst_descriptors = sift.detectAndCompute(dst, None)
-
-    # Match features using BFMatcher
-    bf = cv2.BFMatcher(cv2.NORM_L2, crossCheck=True)
-    matches = bf.match(src_descriptors, dst_descriptors)
-    matches = sorted(matches, key=lambda x: x.distance)
-
-    # Extract matched keypoints
-    src_pts = np.float32([src_keypoints[m.queryIdx].pt for m in matches]).reshape(
-        -1, 1, 2
-    )
-    dst_pts = np.float32([dst_keypoints[m.trainIdx].pt for m in matches]).reshape(
-        -1, 1, 2
-    )
-
-    # Compute homography matrix
-    return cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)[0]
+    src_keypoints, src_descriptors = sift.detectAndCompute(source_8bit, None)
+    dst_keypoints, dst_descriptors = sift.detectAndCompute(dest_8bit, None)
+    
+    matcher = cv2.BFMatcher(cv2.NORM_L2, crossCheck=True)
+    matches = sorted(matcher.match(src_descriptors, dst_descriptors), key=lambda x: x.distance)
+    
+    src_points = np.float32([src_keypoints[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
+    dst_points = np.float32([dst_keypoints[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
+    
+    homography, _ = cv2.findHomography(src_points, dst_points, cv2.RANSAC, 5.0)
+    return homography
 
 
-def make_eye_mask(pixmaps: Dict[str, np.ndarray], eye: str) -> np.ndarray:
+def create_bad_pixel_mask(pixmaps: Dict[str, np.ndarray], camera: str) -> np.ndarray:
     """
-    Create bad pixel mask for specified camera eye.
-
+    Create mask of bad pixels for specified camera.
+    
     Args:
         pixmaps: Dictionary of pixel maps
-        eye: Camera eye ('L' or 'R')
-
+        camera: Camera identifier ('L' or 'R')
+        
     Returns:
         Boolean mask of bad pixels
     """
-    pixmaps = {k: v for k, v in pixmaps.items() if k.startswith(eye)}
-    pixmaps = [np.isin(v, BAD_PIXMAP_VALUES) for v in pixmaps.values()]
-    return np.any(np.dstack(pixmaps), axis=2)
+    camera_pixmaps = {k: v for k, v in pixmaps.items() if k.startswith(camera)}
+    bad_pixel_masks = [np.isin(v, BAD_PIXEL_VALUES) for v in camera_pixmaps.values()]
+    return np.any(np.dstack(bad_pixel_masks), axis=2)
 
 
-def apply_pixmaps(
-    bands: Dict[str, np.ndarray], pixmaps: Dict[str, np.ndarray]
-) -> Dict[str, np.ndarray]:
+def apply_pixel_masks(bands: Dict[str, np.ndarray],
+                     pixmaps: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
     """
-    Apply pixel maps to mask bad pixels with NaN values.
-
+    Apply pixel maps to mask bad pixels with NaN.
+    
     Args:
         bands: Dictionary of band data
         pixmaps: Dictionary of pixel maps
-
+        
     Returns:
-        Dictionary of bands with bad pixels masked as NaN
+        Bands with bad pixels masked as NaN
     """
-    l_pix_mask = make_eye_mask(pixmaps, "L")
-    r_pix_mask = make_eye_mask(pixmaps, "R")
+    left_mask = create_bad_pixel_mask(pixmaps, "L")
+    right_mask = create_bad_pixel_mask(pixmaps, "R")
+    
+    masked_bands = {}
+    for band_name, band_data in bands.items():
+        mask = left_mask if band_name.startswith("L") else right_mask
+        masked_bands[band_name] = np.where(mask, np.nan, band_data)
+    
+    return masked_bands
 
-    outbands = {}
-    for k, v in bands.items():
-        mask = l_pix_mask if k.startswith("L") else r_pix_mask
-        outbands[k] = np.where(mask, np.nan, bands[k])
 
-    return outbands
+def create_rgb_stretch(cube: np.ndarray) -> np.ndarray:
+    """
+    Create RGB stretched image from hyperspectral cube.
+    
+    Args:
+        cube: Hyperspectral data cube
+        
+    Returns:
+        RGB stretched image for visualization
+    """
+    from marslab.imgops.imgutils import enhance_color
+    
+    rgb_dict = {'R': cube[2], 'G': cube[1], 'B': cube[0]}
+    rgb_stack = np.stack([rgb_dict['R'], rgb_dict['G'], rgb_dict['B']], axis=-1)
+    rgb_masked = np.ma.masked_invalid(rgb_stack)
+    return enhance_color(rgb_masked, bounds=(0, 1), stretch=0.1)

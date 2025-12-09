@@ -1,6 +1,6 @@
-/results
-/sparc
+/sparc_venv
 *__pycache__
 *.venv*
 uv.lock
 src/sparc.egg-info
+test_sparc_pipeline.ipynb

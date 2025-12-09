@@ -1,297 +1,106 @@
 # SPARC: Spectral Pattern Analysis for ROI Classification
 
-SPARC is a Python package for analyzing hyperspectral images to identify and classify regions of interest (ROIs) based on their spectral signatures.
+SPARC is a modular pipeline for automating Region of Interest (ROI) extraction from hyperspectral imagery (specifically ZCAM/Marslab data). It combines deep learning (SAM) for semantic segmentation with statistical spectral clustering to identify homogeneous geological features.
 
-## Installation
+## Architecture
 
-### Requirements
+The project follows a **Functional Core, Imperative Shell** pattern:
 
-- **Python 3.11** (required)
-- Git (for installing dependencies from repositories)
+* **Shell (sparc.py):** The Object-Oriented interface for state management and configuration.
+* **Core (pipeline.py):** Pure functions transforming SparcState through distinct processing steps.
+* **State (state.py):** A dataclass acting as the single source of truth for the pipeline lifecycle.
+* **Backends (backends.py):** Abstraction layer for swapping segmentation (CPU/GPU) and clustering implementations.
 
-### Option 1: uv (Recommended - Fast)
+## Installation & Setup
 
-```bash
-# Install uv if you don't have it
-curl -LsSf https://astral.sh/uv/install.sh | sh
+This project requires manual configuration of specific dependencies and external repositories before running.
 
-# Clone the repository
-git clone https://github.com/lars-olt/sparc.git
-cd sparc
+### 1. PyTorch & CUDA
 
-# Create environment and install (uv handles everything automatically)
-uv sync
+You must manually install a version of PyTorch that matches your local CUDA version (e.g., CUDA 12.4). The standard requirements file does not handle this to avoid platform mismatches.
 
-# Activate the environment
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-
-# Or install in existing environment
-uv pip install -e .
+# Example for CUDA 12.4
+```console
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 ```
 
-### Option 2: pip (Standard)
+### 2. External Repositories
 
-```bash
-# Clone the repository
-git clone https://github.com/lars-olt/sparc.git
-cd sparc
+The pipeline relies on several private or external libraries that must be manually cloned and installed:
 
-# Create virtual environment with Python 3.11
-python3.11 -m venv sparc-env
-source sparc-env/bin/activate  # On Windows: sparc-env\Scripts\activate
+* asdf: https://github.com/MillionConcepts/asdf.git
+* pdr: https://github.com/MillionConcepts/pdr.git
+* silencio: https://github.com/MillionConcepts/silencio.git
+* prettyplot: https://github.com/MillionConcepts/pretty-plot.git
 
-# Install SPARC with all dependencies
-pip install -e .
+### 3. Standard Dependencies
 
-# Or install with development dependencies
-pip install -e ".[dev]"
+Install the remaining standard Python packages (NumPy, OpenCV, Segment Anything, etc.) via the requirements file:
+
+```console
+pip install -r requirements.txt
 ```
 
-### Option 3: Direct pip install
+### 4. SAM Model Weights
 
-```bash
-# Create virtual environment
-python3.11 -m venv sparc-env
-source sparc-env/bin/activate
+Ensure you have the Segment Anything Model (SAM) weights.
 
-# Install directly from repository
-pip install git+https://github.com/lars-olt/sparc.git
-
-# Or with development tools
-pip install "git+https://github.com/lars-olt/sparc.git[dev]"
-```
-
-### SAM Model Download
-
-Download the required SAM model weights:
-
-```bash
-# Create models directory
-mkdir models
-cd models
-
-# Download ViT-H model (recommended, ~2.4GB)
-curl -O https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth
-```
+* Download: ViT-H SAM model (https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth)
+* Placement: Place in your project root or defined model directory.
 
 ## Quick Start
 
+The primary entry point is the Sparc class.
+
 ```python
-from sparc import Sparc
+from src.sparc import Sparc, export_spectra_csv
 
-# Initialize with SAM model path
-sparc = Sparc(sam_model_path="models/sam_vit_h_4b8939.pth")
-
-# Run complete pipeline
-sparc.run_pipeline(
-    iof_path="path/to/data",
-    obs_ix=0,
-    load_kwargs={'do_apply_pixmaps': True},
-    preprocess_kwargs={
-        'shadow_kwargs': {'percentiles': (20, 100)},
-        'apply_r_star': True
-    }
+# 1. Initialize
+# 'verbose=True' enables debug logging (shapes, timings, spectral stats)
+sparc = Sparc(
+    sam_model_path="./models/sam_vit_h_4b8939.pth",
+    use_gpu=True,       # Auto-falls back to CPU if CUDA unavailable
+    use_threading=True,
+    verbose=True
 )
 
-# Access results
-print(sparc.summary)
-sparc.plot_results()
-```
-
-## Troubleshooting
-
-### KMeans Memory Leak Warning (Windows)
-
-If you see warnings about KMeans memory leaks on Windows:
-
-```python
-from sparc import force_fix_kmeans_warnings
-force_fix_kmeans_warnings()  # Call before using SPARC
-```
-
-## Step-by-Step Usage
-
-For more control over the pipeline:
-
-```python
-# Load data
-sparc.load_data("path/to/data", obs_ix=0)
-
-# Preprocess
-sparc.preprocess()
-
-# Segment image
-sparc.segment()
-
-# Extract ROIs
-sparc.extract_rois()
-
-# Filter and analyze
-sparc.filter_rois(area_threshold=50)
-sparc.analyze_spectra()
-sparc.select_final_rois()
-
-# Visualize
-sparc.plot_results()
-```
-
-## Export and Analysis Results
-
-SPARC provides export capabilities for saving results:
-
-### Quick Export (All Formats)
-
-```python
-# Export everything with one command
-exported_files = sparc.export_results(
-    output_dir="results",
-    base_name="my_analysis",
-    metadata={'SOL': 619, 'FEATURE': 'bedrock'}
+# 2. Run Pipeline
+# Supports method chaining
+(sparc
+    .load(iof_path="/path/to/mcz/data", obs_ix=0)
+    .preprocess(apply_r_star=True)
+    .segment(points_per_side=32)
+    .extract_rois(
+        area_threshold=50,
+        min_cluster_area=500,  # Min area to attempt sub-clustering
+        min_clean_area=4000    # Min area to keep after morphological cleaning
+    )
+    .analyze(contamination=0.1) # Outlier detection
+    .select()
 )
+
+# 3. Visualization & Export
+# Plot summary (RGB, Segmentation, ROIs, Spectra)
+sparc.plot(figsize=(15, 12))
+
+# Access immutable results
+result = sparc.result
+print(f"Found {len(result.final_rois)} ROIs in {result.n_clusters} spectral clusters")
+
+# Export to Marslab-compatible CSV
+export_spectra_csv(result, "output/spectra.csv")
 ```
 
-### Individual Exports
+### Configuration
+Configuration is handled via strongly-typed dataclasses in config.py. You can adjust these dynamically via the method arguments shown above, or by modifying the config object directly before running steps.
 
-#### CSV Export (marslab-compatible format)
+Key Tuning Parameters:
+* ROIConfig:
+    * albedo_ratio_threshold: Filters artifacts where Left/Right camera alignment fails (default: 0.80).
+    * allowed_variance: Threshold for splitting a SAM segment into multiple spectral clusters.
+    * edge_offset: Pixels to ignore around the image border.
+    * max_subclusters: Absolute limit on sub-clusters per segment to prevent fragmentation.
 
-```python
-# Save ROI data in marslab CSV format
-metadata = {
-    'SOL': 619,
-    'SITE': 42,
-    'FEATURE': 'bedrock',
-    'DESCRIPTION': 'Automated ROI detection',
-    'LAT': 18.4446,
-    'LON': 77.4509
-}
-sparc.save_roi_csv("roi_analysis.csv", metadata)
-```
-
-#### Plot and Image Export
-
-```python
-# Save high-resolution plots
-plots = sparc.save_plots("output_dir/", dpi=300)
-
-# Or use SparcExporter for more control
-from sparc.utils.io import SparcExporter
-exporter = SparcExporter(sparc)
-
-# Save spectra plot as PDF for publication
-exporter.save_spectra_plot("spectra.pdf", figsize=(10,6), dpi=300, format='pdf')
-
-# Save ROI context image
-exporter.save_roi_context_image("context.png", dpi=600)
-
-# Save complete pipeline summary
-exporter.save_pipeline_summary_image("pipeline.png")
-```
-
-## Exported File Formats
-
-1. **CSV File**: marslab-compatible format with spectral data, ROI coordinates, and metadata
-2. **Spectra Plot**: High-resolution plot of final selected spectra
-3. **ROI Context Image**: RGB image with ROI overlays
-4. **Pipeline Summary**: 4-panel summary showing segmentation, ROIs, and spectra
-5. **Results Pickle**: Complete pipeline state for later analysis
-
-## Pipeline Components
-
-### Data Loading
-
-- ZCAM hyperspectral data ingestion
-- Homography correction for stereo alignment
-- RGB image generation for segmentation
-
-### Preprocessing
-
-- Shadow and sky masking
-- Bad pixel correction via pixmaps
-- Photometric calibration (R\* conversion)
-
-### Segmentation
-
-- SAM (Segment Anything Model) integration
-- Automatic region detection
-
-### ROI Analysis
-
-- Spectral clustering within segments
-- Area-based filtering
-- Outlier detection using frequency analysis
-- Bayesian Gaussian Mixture Models
-
-### Visualization
-
-- ROI overlay plots
-- Spectral signature plots
-- Clustering results visualization
-- Complete pipeline summary plots
-
-## API Reference
-
-### Main Class
-
-#### `Sparc(sam_model_path)`
-
-Main class for the SPARC pipeline.
-
-**Methods:**
-
-- `load_data()`: Load hyperspectral data
-- `preprocess()`: Apply masking and calibration
-- `segment()`: Perform SAM segmentation
-- `extract_rois()`: Extract potential ROIs
-- `filter_rois()`: Filter ROIs by area and spectral properties
-- `analyze_spectra()`: Perform spectral clustering analysis
-- `select_final_rois()`: Apply final selection heuristics
-- `plot_results()`: Visualize final results
-- `run_pipeline()`: Execute complete pipeline
-
-**State Management:**
-
-- `save_state()`: Save current pipeline state to file
-- `reload_from_file()`: Load state from saved file
-- `continue_analysis()`: Continue analysis from saved state
-- `compare_with_saved()`: Compare current results with saved file
-
-**Class Methods:**
-
-- `from_saved_results()`: Create instance from saved file
-
-**Export Methods:**
-
-- `export_results()`: Export all results (CSV, plots, images)
-- `save_roi_csv()`: Save ROI data in marslab format
-- `save_plots()`: Save visualization plots
-
-**Properties:**
-
-- `summary`: Pipeline state summary
-- `is_complete`: Whether pipeline is finished
-- `is_loaded_from_file`: Whether instance was loaded from file
-- `final_rois`: Final selected ROIs
-- `roi_spectra`: Extracted spectra
-- `clustering_result`: Clustering analysis results
-
-## Development
-
-For contributors working on SPARC:
-
-```bash
-# Clone repository
-git clone https://github.com/lars-olt/sparc.git
-cd sparc
-
-# Install with development dependencies
-uv sync  # if using uv
-# or
-pip install -e ".[dev]"  # if using pip
-
-# Run tests
-pytest tests/
-
-# Code formatting
-black src/
-isort src/
-```
+### Technical Notes
+* Threading on Windows: This project utilizes a SafeKMeans wrapper in threading.py. It explicitly manages environment variables (setting OMP_NUM_THREADS=1 for worker processes) to prevent memory leaks and crashes associated with the MKL library when using Python's multiprocessing on Windows.
+* Dependencies: Requires marslab (for IOF data loading), segment-anything, torch, scikit-learn, numpy, and matplotlib.

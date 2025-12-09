@@ -1,179 +1,180 @@
-"""Geometric utility functions."""
+"""Geometric utility functions for ROI extraction."""
 
 import numpy as np
 from scipy.ndimage import distance_transform_edt
 from typing import Tuple
 
-from ..core.constants import _EDGE_MASK_CACHE, RGB_MAPPING
-from marslab.imgops.imgutils import enhance_color
+from ..core.constants import _EDGE_MASK_CACHE, RGB_BANDS
 
 
-def get_center_of_mass(masked_arr: np.ndarray) -> Tuple[int, int]:
+def find_center_of_mass(mask: np.ndarray) -> Tuple[int, int]:
     """
     Find center of mass using distance transform for density weighting.
-
+    
     Args:
-        masked_arr: Boolean mask array
-
+        mask: Boolean mask array
+        
     Returns:
-        Tuple of (row, col) coordinates of center of mass
+        Tuple of (row, col) coordinates
     """
-    # Compute density map based on distance from edges
-    distance_transform = distance_transform_edt(masked_arr)
-
-    # Normalize distances
-    normalized_distance = distance_transform / distance_transform.max()
-
-    # Apply original array as mask (only interested in density within target region)
-    density_within_mask = normalized_distance * masked_arr
-
-    # Find highest density location
-    highest_density_loc = np.where(density_within_mask == 1)
-
-    # Return first center of mass found
-    cxs, cys = highest_density_loc
-    center_of_mass = (int(cxs[0]), int(cys[0]))
-
-    return center_of_mass
+    distance_map = distance_transform_edt(mask)
+    normalized_distance = distance_map / distance_map.max()
+    density_map = normalized_distance * mask
+    
+    max_density_locations = np.where(density_map == 1)
+    row, col = max_density_locations
+    
+    return int(row[0]), int(col[0])
 
 
-def largest_rect_around_center(
-    mask: np.ndarray, center: Tuple[int, int]
-) -> Tuple[int, int, int, int]:
+def find_largest_rectangle(mask: np.ndarray, center: Tuple[int, int]) -> Tuple[int, int, int, int]:
     """
-    Find the largest rectangle centered at given point that fits within the mask.
-
+    Find largest rectangle centered at point that fits within mask.
+    
     Args:
         mask: Boolean mask array
         center: Center point (row, col)
-
+        
     Returns:
         Tuple of (left, top, right, bottom) coordinates
     """
     row, col = int(center[0]), int(center[1])
-    total_rows, total_cols = mask.shape
-
-    # Initialize boundaries to center point
+    height, width = mask.shape
+    
     left = right = col
     top = bottom = row
-
-    # Track expansion possibilities
-    left_inbounds = True
-    right_inbounds = True
-    top_inbounds = True
-    bottom_inbounds = True
-
-    # Expand in each direction until image edge or mask edge is reached
-    while left_inbounds or right_inbounds or top_inbounds or bottom_inbounds:
-        left_inbounds = (left > 0) and np.all(
-            mask[top : bottom + 1, left - 1 : right + 1] == 1
-        )
-        right_inbounds = (right < total_cols - 1) and np.all(
-            mask[top : bottom + 1, left : right + 2] == 1
-        )
-        top_inbounds = (top > 0) and np.all(
-            mask[top - 1 : bottom + 1, left : right + 1] == 1
-        )
-        bottom_inbounds = (bottom < total_rows - 1) and np.all(
-            mask[top : bottom + 2, left : right + 1] == 1
-        )
-
-        if left_inbounds:
+    
+    can_expand_left = True
+    can_expand_right = True
+    can_expand_top = True
+    can_expand_bottom = True
+    
+    while any([can_expand_left, can_expand_right, can_expand_top, can_expand_bottom]):
+        can_expand_left = (left > 0) and check_rectangle_valid(mask, top, bottom, left - 1, right)
+        can_expand_right = (right < width - 1) and check_rectangle_valid(mask, top, bottom, left, right + 1)
+        can_expand_top = (top > 0) and check_rectangle_valid(mask, top - 1, bottom, left, right)
+        can_expand_bottom = (bottom < height - 1) and check_rectangle_valid(mask, top, bottom + 1, left, right)
+        
+        if can_expand_left:
             left -= 1
-        if right_inbounds:
+        if can_expand_right:
             right += 1
-        if top_inbounds:
+        if can_expand_top:
             top -= 1
-        if bottom_inbounds:
+        if can_expand_bottom:
             bottom += 1
+    
+    return left, top, right, bottom
 
-    return (left, top, right, bottom)
 
-
-def get_roi(masked_arr: np.ndarray) -> Tuple[int, Tuple[int, int, int, int]]:
+def check_rectangle_valid(mask: np.ndarray,
+                         top: int,
+                         bottom: int,
+                         left: int,
+                         right: int) -> bool:
     """
-    Extract ROI rectangle for a masked region.
-
+    Check if rectangle region is fully within mask.
+    
     Args:
-        masked_arr: Boolean mask array
-
+        mask: Boolean mask
+        top: Top coordinate
+        bottom: Bottom coordinate
+        left: Left coordinate
+        right: Right coordinate
+        
     Returns:
-        Tuple of (area, rectangle_coords) where rectangle is (left, top, width, height)
+        True if all pixels in rectangle are masked
     """
-    center_of_mass = get_center_of_mass(masked_arr)
+    return np.all(mask[top:bottom + 1, left:right + 1] == 1)
 
-    # Find the largest rectangle centered at this point
-    left, top, right, bottom = largest_rect_around_center(masked_arr, center_of_mass)
 
+def extract_roi(mask: np.ndarray) -> Tuple[int, Tuple[int, int, int, int]]:
+    """
+    Extract ROI rectangle for masked region.
+    
+    Args:
+        mask: Boolean mask array
+        
+    Returns:
+        Tuple of (area, rectangle) where rectangle is (left, top, width, height)
+    """
+    center = find_center_of_mass(mask)
+    left, top, right, bottom = find_largest_rectangle(mask, center)
+    
     width = right - left + 1
     height = bottom - top + 1
     area = width * height
-
-    rect = (left, top, width, height)
-
-    return area, rect
+    
+    return area, (left, top, width, height)
 
 
-def get_edge_mask(shape: Tuple[int, int], edge_offset: int) -> np.ndarray:
+def create_edge_mask(shape: Tuple[int, int], offset: int) -> np.ndarray:
     """
     Create edge mask with caching for performance.
-
+    
     Args:
         shape: Image shape (height, width)
-        edge_offset: Offset from edges in pixels
-
+        offset: Offset from edges in pixels
+        
     Returns:
         Boolean mask with edge pixels set to False
     """
-    if (shape, edge_offset) in _EDGE_MASK_CACHE:
-        return _EDGE_MASK_CACHE[(shape, edge_offset)]
-
-    max_y, max_x = shape
+    cache_key = (shape, offset)
+    
+    if cache_key in _EDGE_MASK_CACHE:
+        return _EDGE_MASK_CACHE[cache_key]
+    
+    height, width = shape
     edge_mask = np.ones(shape, dtype=bool)
-    edge_mask[:, :edge_offset] = 0
-    edge_mask[:, (max_x - edge_offset) :] = 0
-    edge_mask[:edge_offset, :] = 0
-    edge_mask[(max_y - edge_offset) :, :] = 0
-
-    _EDGE_MASK_CACHE[(shape, edge_offset)] = edge_mask
+    
+    edge_mask[:, :offset] = 0
+    edge_mask[:, width - offset:] = 0
+    edge_mask[:offset, :] = 0
+    edge_mask[height - offset:, :] = 0
+    
+    _EDGE_MASK_CACHE[cache_key] = edge_mask
     return edge_mask
 
 
-def rect_to_plot_coords(rect_coords: np.ndarray) -> list:
+def convert_to_plot_coords(rois: np.ndarray) -> list:
     """
-    Convert rectangle coordinates from (x, y, w, h) to (x1, y1, x2, y2) format.
-
+    Convert ROI format from (x, y, w, h) to (x1, y1, x2, y2).
+    
     Args:
-        rect_coords: Array of rectangles in (x, y, width, height) format
-
+        rois: Array of rectangles in (x, y, width, height) format
+        
     Returns:
         List of rectangles in (x1, y1, x2, y2) format
     """
-    plt_coords = []
-    for i in range(len(rect_coords)):
-        x1, y1, w, h = rect_coords[i]
-        x2 = x1 + w
-        y2 = y1 + h
-        plt_coords.append((x1, y1, x2, y2))
-    return plt_coords
+    plot_coords = []
+    
+    for x, y, width, height in rois:
+        plot_coords.append((x, y, x + width, y + height))
+    
+    return plot_coords
 
 
-def get_rgb_stretch(cube: np.ndarray) -> np.ndarray:
+def create_rgb_image(cube: np.ndarray) -> np.ndarray:
     """
-    Create RGB stretched image from hyperspectral cube.
-
+    Create RGB image from hyperspectral cube.
+    
     Args:
         cube: Hyperspectral data cube
-
+        
     Returns:
-        RGB stretched image
+        RGB image array
     """
-    img = {}
-    for i, color in enumerate(RGB_MAPPING):
-        img[color] = cube[i]
+    from marslab.imgops.imgutils import enhance_color
+    
+    rgb_dict = {band: cube[i] for i, band in enumerate(RGB_BANDS)}
+    rgb_stack = np.stack([rgb_dict['R'], rgb_dict['G'], rgb_dict['B']], axis=-1)
+    rgb_masked = np.ma.masked_invalid(rgb_stack)
+    
+    return enhance_color(rgb_masked, bounds=(0, 1), stretch=0.1)
 
-    mapped_img = [img["R"], img["G"], img["B"]]
-    rgb = np.ma.masked_invalid(np.stack(mapped_img, axis=-1))
-    rgb_stretch = enhance_color(rgb, bounds=(0, 1), stretch=0.1)
 
-    return rgb_stretch
+# Alias for backward compatibility
+get_edge_mask = create_edge_mask
+get_roi = extract_roi
+rect_to_plot_coords = convert_to_plot_coords
+get_rgb_stretch = create_rgb_image
