@@ -4,3 +4,4 @@
 uv.lock
 src/sparc.egg-info
 test_sparc_pipeline.ipynb
+pancam_sparc_standalone.ipynb

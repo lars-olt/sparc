@@ -108,6 +108,7 @@ def plot_result(result: SparcResult,
         plot_idx += 1
     
     plt.tight_layout()
+    plt.close(fig)
     return fig
 
 
