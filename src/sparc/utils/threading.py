@@ -27,8 +27,8 @@ def configure_global_settings():
     """
     Apply global settings for the SPARC pipeline.
     
-    1. Configures threading environment variables for Windows/MKL.
-    2. Suppresses known KMeans memory leak warnings.
+    Configures threading environment variables for Windows/MKL.
+    Suppresses known KMeans memory leak warnings.
     """
     if platform.system() == "Windows":
         configure_worker_env(1)
