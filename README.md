@@ -1,23 +1,23 @@
 # SPARC: Spectral Pattern Analysis for ROI Classification
 
-SPARC is a modular pipeline for automating Region of Interest (ROI) extraction from hyperspectral imagery (specifically ZCAM/Marslab data). It combines deep learning (SAM) for semantic segmentation with statistical spectral clustering to identify homogeneous geological features.
+A pipeline for automatically extracting regions of interest from Mars rover hyperspectral images. SPARC combines deep learning segmentation with spectral clustering to identify geologically releant features in MastcamZ data.
 
 ## Architecture
 
-The project follows a **Functional Core, Imperative Shell** pattern:
+SPARC separates state management from pure data transformations:
 
-* **Shell (sparc.py):** The Object-Oriented interface for state management and configuration.
-* **Core (pipeline.py):** Pure functions transforming SparcState through distinct processing steps.
-* **State (state.py):** A dataclass acting as the single source of truth for the pipeline lifecycle.
-* **Backends (backends.py):** Abstraction layer for swapping segmentation (CPU/GPU) and clustering implementations.
+* Shell ([sparc.py](src/sparc/core/sparc.py)): Object-oriented interface for state management and configuration
+* Core ([pipeline.py](src/sparc/core/pipeline.py)): Pure functions that transform data through each processing step
+* State ([state.py](src/sparc/core/state.py)): Dataclass tracking the pipeline lifecycle
+* Backends ([backends.py](src/sparc/core/backends.py)): Abstraction layer for quickly swapping segmentation and clustering implementations
 
 ## Installation & Setup
 
-This project requires manual configuration of specific dependencies and external repositories before running.
+This project requires manual setup of several dependencies.
 
 ### 1. PyTorch & CUDA
 
-You must manually install a version of PyTorch that matches your local CUDA version (e.g., CUDA 12.4). The standard requirements file does not handle this to avoid platform mismatches.
+You must manually install a version of PyTorch that matches your local CUDA version (e.g., CUDA 12.4). The requirements file does not handle this.
 
 # Example for CUDA 12.4
 ```console
@@ -55,52 +55,44 @@ The primary entry point is the Sparc class.
 ```python
 from src.sparc import Sparc, export_spectra_csv
 
-# 1. Initialize
-# 'verbose=True' enables debug logging (shapes, timings, spectral stats)
+# Initialize
 sparc = Sparc(
     sam_model_path="./models/sam_vit_h_4b8939.pth",
-    use_gpu=True,       # Auto-falls back to CPU if CUDA unavailable
+    use_gpu=True,
     use_threading=True,
-    verbose=True
+    verbose=True  # Shows shapes, timings, and spectral stats
 )
 
-# 2. Run Pipeline
-# Supports method chaining
+# Run pipeline
 (sparc
     .load(iof_path="/path/to/mcz/data", obs_ix=0)
     .preprocess(apply_r_star=True)
     .segment(points_per_side=32)
     .extract_rois(
         area_threshold=50,
-        min_cluster_area=500,  # Min area to attempt sub-clustering
-        min_clean_area=4000    # Min area to keep after morphological cleaning
+        min_cluster_area=500,
+        min_clean_area=4000
     )
-    .analyze(contamination=0.1) # Outlier detection
+    .analyze(contamination=0.1)
     .select()
 )
 
-# 3. Visualization & Export
-# Plot summary (RGB, Segmentation, ROIs, Spectra)
+# Visualize results
 sparc.plot(figsize=(15, 12))
 
-# Access immutable results
+# Access results
 result = sparc.result
 print(f"Found {len(result.final_rois)} ROIs in {result.n_clusters} spectral clusters")
 
-# Export to Marslab-compatible CSV
+# Export
 export_spectra_csv(result, "output/spectra.csv")
 ```
 
 ### Configuration
 Configuration is handled via strongly-typed dataclasses in config.py. You can adjust these dynamically via the method arguments shown above, or by modifying the config object directly before running steps.
 
-Key Tuning Parameters:
-* ROIConfig:
-    * albedo_ratio_threshold: Filters artifacts where Left/Right camera alignment fails (default: 0.80).
-    * allowed_variance: Threshold for splitting a SAM segment into multiple spectral clusters.
-    * edge_offset: Pixels to ignore around the image border.
-    * max_subclusters: Absolute limit on sub-clusters per segment to prevent fragmentation.
-
-### Technical Notes
-* Threading on Windows: This project utilizes a SafeKMeans wrapper in threading.py. It explicitly manages environment variables (setting OMP_NUM_THREADS=1 for worker processes) to prevent memory leaks and crashes associated with the MKL library when using Python's multiprocessing on Windows.
-* Dependencies: Requires marslab (for IOF data loading), segment-anything, torch, scikit-learn, numpy, and matplotlib.
+Tuning params in [`config.py`](src/sparc/core/config.py):
+* `albedo_ratio_threshold` (default: 0.80): filters pixels with large descrepancy between the left and right cameras.
+* `allowed_variance`: threshold for splitting a SAM segment into multiple spectral clusters.
+* `edge_offset`: number of pixels to ignore around the image border.
+* `max_subclusters`: Absolute limit on sub-clusters per segment to prevent fragmentation.
