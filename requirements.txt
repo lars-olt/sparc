@@ -20,7 +20,7 @@ scikit-image
 astropy
 
 # NOTE: need to install PyTorch with CUDA (matching local version)
-# i.e., uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+# E.g., for cuda 12.4: uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 
 # also, install these
 # asdf, https://github.com/MillionConcepts/asdf.git
