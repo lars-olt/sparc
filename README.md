@@ -46,7 +46,7 @@ pip install -r requirements.txt
 Ensure you have the Segment Anything Model (SAM) weights.
 
 * Download: ViT-H SAM model (https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth)
-* Placement: Place in your project root or defined model directory.
+* Placement: doesn't matter - you will pass it's location as a string when initializing sparc
 
 ## Quick Start
 
