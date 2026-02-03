@@ -22,6 +22,7 @@ class LoadResult(TypedDict):
     base_bands: Dict[str, np.ndarray]
     bandset: ZcamBandSet
     homography_mask: np.ndarray
+    homography_matrix: np.ndarray
     rgb_img: np.ndarray
     left_rgb_img: np.ndarray
     right_rgb_img: np.ndarray
@@ -101,6 +102,7 @@ def load_cube(iof_path: str,
         'base_bands': base_bands,
         'bandset': bandset,
         'homography_mask': homography_mask,
+        'homography_matrix': homography_matrix,
         'rgb_img': right_rgb_img,  # Use right as default
         'left_rgb_img': left_rgb_img,
         'right_rgb_img': right_rgb_img,
