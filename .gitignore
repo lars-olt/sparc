@@ -1,7 +1,8 @@
-/sparc_venv
 *__pycache__
 *.venv*
 uv.lock
-src/sparc.egg-info
-test_sparc_pipeline.ipynb
-pancam_sparc_standalone.ipynb
+
+/paper_products
+
+demo (summary products).ipynb
+tree.txt

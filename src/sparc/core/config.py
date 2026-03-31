@@ -1,7 +1,7 @@
 """Configuration dataclasses for SPARC pipeline."""
 
 from dataclasses import dataclass, field
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 from enum import Enum
 
 
@@ -22,10 +22,12 @@ class ROIBackend(Enum):
 class LoadConfig:
     """Configuration for data loading."""
     iof_path: str
+    instrument: str = "ZCAM"
     seq_id: Optional[str] = None
     obs_ix: int = 0
     do_apply_pixmaps: bool = True
     ignore_bayers: bool = False
+    rgb_bands: Optional[Tuple[str, str, str]] = None
 
 
 @dataclass
@@ -74,13 +76,13 @@ class ROIConfig:
     area_threshold: int = 50
     albedo_ratio_threshold: float = 0.80
     min_segment_size: int = 50
-    
+
     # Advanced Clustering Parameters
-    min_cluster_area: int = 500         # Min area to attempt sub-clustering
-    min_clean_area: int = 4000          # Min area after cleaning to sub-cluster
-    morph_opening_threshold: int = 1000 # Area threshold to apply morph opening
-    max_subclusters: int = 10           # Absolute max sub-clusters per segment
-    subcluster_area_divisor: int = 1000 # Divisor for density-based clustering limits
+    min_cluster_area: int = 500
+    min_clean_area: int = 4000
+    morph_opening_threshold: int = 1000
+    max_subclusters: int = 10
+    subcluster_area_divisor: int = 1000
 
 
 @dataclass
@@ -88,7 +90,7 @@ class SpectralConfig:
     """Configuration for spectral analysis."""
     contamination: float = 0.1
     freq_threshold: float = 0.7
-    max_components: Optional[int] = None
+    max_components: int = 9
 
 
 @dataclass
@@ -107,14 +109,14 @@ class SparcConfig:
     roi: ROIConfig = field(default_factory=ROIConfig)
     spectral: SpectralConfig = field(default_factory=SpectralConfig)
     performance: PerformanceConfig = field(default_factory=PerformanceConfig)
-    
+
     def validate(self):
         """Validate configuration consistency."""
         if self.roi.backend == ROIBackend.THREADED and self.performance.n_threads is None:
             import psutil
             self.performance.n_threads = max(1, psutil.cpu_count(logical=False) - 1)
-        
-        if self.segment.backend == SegmentationBackend.GPU or self.segment.backend == SegmentationBackend.OPTIMIZED:
+
+        if self.segment.backend in (SegmentationBackend.GPU, SegmentationBackend.OPTIMIZED):
             try:
                 import torch
                 if not torch.cuda.is_available():

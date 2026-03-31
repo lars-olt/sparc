@@ -1,4 +1,4 @@
-"""SPARC utilities module - Array operations, geometry, and threading."""
+"""SPARC utilities module - Array operations, geometry, threading, and helpers."""
 
 from .array_ops import (
     mask_cube,
@@ -18,7 +18,6 @@ from .geometry import (
     create_edge_mask,
     convert_to_plot_coords,
     create_rgb_image,
-    # Backward compatibility aliases
     get_edge_mask,
     get_roi,
     rect_to_plot_coords,
@@ -26,6 +25,11 @@ from .geometry import (
 )
 from .threading import (
     SafeKMeans,
+)
+from .pancam_helpers import (
+    parse_pcam_fn,
+    scan_pcam_files,
+    get_pcam_bandset,
 )
 
 __all__ = [
@@ -38,7 +42,7 @@ __all__ = [
     'normalize_zscore',
     'normalize_l2',
     'compute_spectral_statistics',
-    
+
     # Geometry
     'find_center_of_mass',
     'find_largest_rectangle',
@@ -47,11 +51,16 @@ __all__ = [
     'create_edge_mask',
     'convert_to_plot_coords',
     'create_rgb_image',
-    'get_edge_mask',  # Alias
-    'get_roi',  # Alias
-    'rect_to_plot_coords',  # Alias
-    'get_rgb_stretch',  # Alias
-    
+    'get_edge_mask',
+    'get_roi',
+    'rect_to_plot_coords',
+    'get_rgb_stretch',
+
     # Threading
     'SafeKMeans',
+
+    # Pancam helpers
+    'parse_pcam_fn',
+    'scan_pcam_files',
+    'get_pcam_bandset',
 ]

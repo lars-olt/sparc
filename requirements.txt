@@ -18,6 +18,8 @@ google-api-python-client
 sh==0.108
 scikit-image
 astropy
+pandas<3.0
+setuptools<80.10.0
 
 # NOTE: need to install PyTorch with CUDA (matching local version)
 # E.g., for cuda 12.4: uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124

@@ -50,60 +50,48 @@ def plot_rois_on_image(img: np.ndarray,
 
 
 def plot_spectra_with_error(spectra: np.ndarray,
-                           stds: np.ndarray,
-                           ax: Optional[plt.Axes] = None,
-                           colors: List[str] = COLORS,
-                           show: bool = True) -> plt.Figure:
+                            stds: np.ndarray,
+                            ax: Optional[plt.Axes] = None,
+                            colors: List[str] = COLORS,
+                            show: bool = True,
+                            wavelengths: Optional[List[float]] = None) -> plt.Figure:
     """
     Plot spectra with error bars.
-    
-    Args:
-        spectra: Array of spectra to plot
-        stds: Standard deviations for error bars
-        ax: Optional axes to plot on
-        colors: List of colors to cycle through
-        show: Whether to display plot
-        
-    Returns:
-        matplotlib Figure
     """
     if ax is None:
         fig, ax = plt.subplots(figsize=(7, 7))
     else:
         fig = ax.get_figure()
-    
-    bayer_sorted = np.argsort(WAVELENGTHS[:3])
-    non_bayer_sorted = np.argsort(WAVELENGTHS[3:]) + 3
-    
+
+    wls = np.array(wavelengths if wavelengths is not None else WAVELENGTHS)
+    n_bands = spectra.shape[1]
+    wls = wls[:n_bands]  # guard against any length mismatch
+
+    sorted_indices = np.argsort(wls)
+    sorted_wls = wls[sorted_indices]
+
     for i, spectrum in enumerate(spectra):
         color = colors[i % len(colors)]
         marker = PLOT_MARKERS[i % len(PLOT_MARKERS)]
-        
-        # Plot non-Bayer bands with error bars
-        nb_wls = np.array(WAVELENGTHS)[non_bayer_sorted]
-        nb_data = spectrum[non_bayer_sorted]
-        nb_std = stds[i][non_bayer_sorted]
-        
+
         ax.errorbar(
-            nb_wls, nb_data,
-            yerr=nb_std,
+            sorted_wls,
+            spectrum[sorted_indices],
+            yerr=stds[i][sorted_indices],
             fmt="-",
+            marker=marker,
             ecolor=color,
             capsize=3,
             color=color
         )
-        
-        # Plot Bayer bands as points
-        b_wls = np.array(WAVELENGTHS)[bayer_sorted]
-        b_data = spectrum[bayer_sorted]
-        ax.plot(b_wls, b_data, "+", color=color)
-    
+
     ax.set_xlabel("Wavelength (nm)")
     ax.set_ylabel("R* = IOF/cos(θ)")
-    
+    ax.grid(True, alpha=0.3)
+
     if show:
         plt.show()
-    
+
     return fig
 
 

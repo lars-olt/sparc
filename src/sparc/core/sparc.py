@@ -80,20 +80,24 @@ class Sparc:
             logger.debug("SPARC initialized with verbose logging enabled")
     
     def load(self,
-             iof_path: str,
-             seq_id: Optional[str] = None,
-             obs_ix: int = 0,
-             do_apply_pixmaps: bool = True,
-             ignore_bayers: bool = False) -> 'Sparc':
+         iof_path: str,
+         instrument: str = "ZCAM",
+         seq_id: Optional[str] = None,
+         obs_ix: int = 0,
+         do_apply_pixmaps: bool = True,
+         ignore_bayers: bool = False,
+         rgb_bands: Optional[tuple] = None) -> 'Sparc':
         """Load hyperspectral data."""
         self.config.load = LoadConfig(
             iof_path=iof_path,
+            instrument=instrument,
             seq_id=seq_id,
             obs_ix=obs_ix,
             do_apply_pixmaps=do_apply_pixmaps,
-            ignore_bayers=ignore_bayers
+            ignore_bayers=ignore_bayers,
+            rgb_bands=rgb_bands
         )
-        
+
         self.state = load_step(self.state, self.config)
         return self
     
@@ -154,7 +158,9 @@ class Sparc:
         """Analyze spectra for outliers and clustering."""
         self.config.spectral.contamination = contamination
         self.config.spectral.freq_threshold = freq_threshold
-        self.config.spectral.max_components = max_components
+        
+        if max_components is not None:
+            self.config.spectral.max_components = max_components
         
         self.state = spectral_step(self.state, self.config)
         return self

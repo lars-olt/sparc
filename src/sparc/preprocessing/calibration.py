@@ -1,45 +1,66 @@
-"""Photometric calibration functionality."""
+"""Photometric calibration for SPARC - converts IOF to R*."""
+
+import math
+from typing import Any
 
 import numpy as np
-from typing import Dict, Any
+
+import logging
+logger = logging.getLogger(__name__)
 
 
 def apply_photometric_calibration(masked_cube: np.ndarray,
-                                 bandset_metadata: Dict[str, Any],
-                                 apply_r_star: bool) -> np.ndarray:
+                                  bandset_metadata: Any,
+                                  apply_r_star: bool) -> np.ndarray:
     """
-    Apply photometric calibration to convert IOF to R*.
-    
-    R* = IOF / cos(θ) where θ is the incidence angle.
-    
-    Args:
-        masked_cube: Preprocessed masked cube
-        bandset_metadata: Metadata containing incidence angle
-        apply_r_star: Whether to apply R* calibration
-        
-    Returns:
-        Photometrically calibrated cube
+    Convert IOF to R* via R* = IOF / cos(θ).
+
+    θ is derived from INCIDENCE_ANGLE (ZCAM) or SOLAR_ELEVATION (Pancam).
     """
-    if apply_r_star:
-        incidence_angle = extract_incidence_angle(bandset_metadata)
-        scaling_factor = np.cos(np.radians(incidence_angle))
-    else:
-        scaling_factor = 1.0
-    
-    return masked_cube / scaling_factor
+    if not apply_r_star:
+        return masked_cube
+    return masked_cube / np.cos(np.radians(extract_incidence_angle(bandset_metadata)))
 
 
-def extract_incidence_angle(metadata: Dict[str, Any]) -> float:
+def extract_incidence_angle(metadata: Any) -> float:
     """
-    Extract incidence angle from metadata.
-    
-    Uses mean because ZCAM metadata can have multiple values
-    in different coordinate systems.
-    
-    Args:
-        metadata: Bandset metadata dictionary
-        
-    Returns:
-        Mean incidence angle in degrees
+    Derive an effective incidence angle in degrees from instrument metadata.
+
+    ZCAM:  reads INCIDENCE_ANGLE directly from the bandset DataFrame.
+    Pancam: converts SOLAR_ELEVATION from the PDS label using
+            θ = (solar_elevation + 90) × 2pi / 360.
+
+    Raises ValueError if the angle cannot be determined.
     """
-    return metadata["INCIDENCE_ANGLE"].unique().mean()
+    # ZCAM - bandset metadata is a DataFrame
+    if hasattr(metadata, 'columns'):
+        if 'INCIDENCE_ANGLE' not in metadata.columns:
+            raise ValueError(
+                "INCIDENCE_ANGLE not found in bandset metadata."
+            )
+        return metadata["INCIDENCE_ANGLE"].unique().mean()
+
+    # Pancam - pdr.Metadata exposes metaget()
+    if hasattr(metadata, 'metaget'):
+        solar_elev = metadata.metaget('SOLAR_ELEVATION')
+        if solar_elev is None:
+            raise ValueError("SOLAR_ELEVATION not found in PDS label.")
+        val = solar_elev['value'] if isinstance(solar_elev, dict) else solar_elev
+        if val is None:
+            raise ValueError("SOLAR_ELEVATION value is null in PDS label.")
+        return math.degrees((val + 90) * 2 * np.pi / 360)
+
+    # Plain dict - used in tests
+    if isinstance(metadata, dict):
+        solar_elev = (
+            metadata.get('SITE_DERIVED_GEOMETRY_PARMS', {}).get('SOLAR_ELEVATION')
+            or metadata.get('SOLAR_ELEVATION')
+        )
+        if solar_elev is None:
+            raise ValueError("SOLAR_ELEVATION not found in metadata dict.")
+        val = solar_elev['value'] if isinstance(solar_elev, dict) else solar_elev
+        if val is None:
+            raise ValueError("SOLAR_ELEVATION value is null in metadata dict.")
+        return math.degrees((val + 90) * 2 * np.pi / 360)
+
+    raise ValueError(f"Unrecognised metadata type: {type(metadata)}.")
