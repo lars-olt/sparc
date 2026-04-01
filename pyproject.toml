@@ -1,35 +1,85 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=61.0,<81"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "sparc"
 version = "2.0.0"
 description = "Spectral Pattern Analysis for ROI Classification"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 dependencies = [
-    "numpy>=1.20.0",
-    "matplotlib>=3.3.0",
-    "scikit-learn>=1.0.0",
+    # --- Core scientific stack ---
+    # numpy<2 is required: torch is compiled against NumPy 1.x and its C API
+    # is incompatible with NumPy 2.x (causes _ARRAY_API not found at runtime).
+    "numpy>=1.24,<2",
     "scipy>=1.7.0",
+    "pandas>=1.3.0,<3.0",
+    "scikit-learn>=1.0.0",
+    "scikit-image>=0.19.0",
+    "matplotlib>=3.3.0",
+    "astropy>=5.0",
+
+    # --- Computer vision ---
     "opencv-python>=4.5.0",
+
+    # --- SAM segmentation ---
+    # torch is intentionally not pinned to a specific CUDA version here.
+    # CPU torch is installed by default (works on Mac and Windows).
+    # GPU users on Windows should run:
+    #   uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+    # (replace cu124 with your local CUDA version)
+    "torch>=2.0.0",
+    "torchvision>=0.15.0",
     "segment-anything>=1.0",
+
+    # --- Spectral analysis ---
     "kneed>=0.7.0",
-    "marslab",
-    "rapid",
-    "PyQt5",
-    "PyYAML",
-    "fs",
-    "rich",
-    "boto3",
-    "gspread",
-    "google-api-python-client",
+
+    # --- MillionConcepts stack ---
+    # These are not on PyPI - installed from GitHub via SSH.
+    # uv lock records the exact commit for reproducibility.
+    # Requires SSH key with access to MillionConcepts GitHub org.
+    "asdf @ git+ssh://git@github.com/MillionConcepts/asdf.git",
+    "pdr @ git+ssh://git@github.com/MillionConcepts/pdr.git",
+    "silencio @ git+ssh://git@github.com/MillionConcepts/silencio.git",
+    "pretty-plot @ git+ssh://git@github.com/MillionConcepts/pretty-plot.git",
+    "marslab @ git+ssh://git@github.com/MillionConcepts/marslab.git",
+    "rapid>=0.0.3",
+
+    # --- Utilities ---
+    "psutil>=5.8.0",
+    "PyYAML>=6.0",
+    "fs>=2.4.0",
+    "rich>=12.0.0",
+    "boto3>=1.20.0",
+    "gspread>=5.0.0",
+    "google-api-python-client>=2.0.0",
     "sh==0.108",
-    "scikit-image",
-    "astropy",
-    "pandas",
-    "psutil"
+    # setuptools>=81 breaks several MillionConcepts packages - pin it out
+    "setuptools<81",
 ]
+
+[project.optional-dependencies]
+# Notebook development dependencies
+dev = [
+    "jupyter>=1.0.0",
+    "jupyterlab>=4.0.0",
+    "ipykernel>=6.0.0",
+    "ipywidgets>=8.0.0",
+]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu124", marker = "sys_platform == 'win32'" },
+]
+torchvision = [
+    { index = "pytorch-cu124", marker = "sys_platform == 'win32'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
 
 [tool.setuptools.packages.find]
 where = ["src"]
