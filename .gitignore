@@ -1,8 +1,15 @@
-*__pycache__
-*.venv*
-uv.lock
+# Python
+__pycache__/
+*.py[oc]
 
+# Virtual environment
+.venv/
+
+# PyInstaller
+build/
+dist/
+
+# Other
 /paper_products
-
 demo (summary products).ipynb
 tree.txt
