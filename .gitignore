@@ -9,6 +9,9 @@ __pycache__/
 build/
 dist/
 
+# Editable install metadata
+*.egg-info/
+
 # Other
 /paper_products
 demo (summary products).ipynb
