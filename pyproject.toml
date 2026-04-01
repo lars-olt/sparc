@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "sparc"
 version = "2.0.0"
 description = "Spectral Pattern Analysis for ROI Classification"
-requires-python = ">=3.11"
+requires-python = "==3.11.*"
 dependencies = [
     # --- Core scientific stack ---
     # numpy<2 is required: torch is compiled against NumPy 1.x and its C API
@@ -23,13 +23,11 @@ dependencies = [
     "opencv-python>=4.5.0",
 
     # --- SAM segmentation ---
-    # torch is intentionally not pinned to a specific CUDA version here.
-    # CPU torch is installed by default (works on Mac and Windows).
-    # GPU users on Windows should run:
-    #   uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
-    # (replace cu124 with your local CUDA version)
-    "torch>=2.0.0",
-    "torchvision>=0.15.0",
+    # torch 2.2.2 is the last version with wheels for Intel Mac (macosx_x86_64).
+    # Windows wheels for 2.2.x are only available on the PyTorch index (not PyPI),
+    # so we use [tool.uv.sources] to route Windows to the PyTorch CPU index.
+    "torch>=2.0.0,<2.3.0",
+    "torchvision>=0.15.0,<0.18.0",
     "segment-anything>=1.0",
 
     # --- Spectral analysis ---
@@ -68,18 +66,14 @@ dev = [
     "ipywidgets>=8.0.0",
 ]
 
-[tool.uv.sources]
-torch = [
-    { index = "pytorch-cu124", marker = "sys_platform == 'win32'" },
-]
-torchvision = [
-    { index = "pytorch-cu124", marker = "sys_platform == 'win32'" },
-]
-
-[[tool.uv.index]]
-name = "pytorch-cu124"
-url = "https://download.pytorch.org/whl/cu124"
-explicit = true
-
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.uv]
+# Ensure the lockfile covers all supported platforms so it works on both
+# Intel Mac, Apple Silicon Mac, and Windows x86_64.
+environments = [
+    "sys_platform == 'darwin' and platform_machine == 'x86_64'",
+    "sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "sys_platform == 'win32' and platform_machine == 'AMD64'",
+]
