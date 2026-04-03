@@ -128,7 +128,7 @@ def _load_zcam_cube(
 
     # Recipe maps each merged-cube band to its source(s) in left_cube / right_cube.
     merged_band_recipe = (
-        [('stereo',     b, b,    b)    for b in shared_keys]
+        [('stereo',     b, b,    right_band_keys[i])    for i, b in enumerate(shared_keys)]
         + [('left_only',  b, b,    None) for b in unique_left_keys]
         + [('right_only', b, None, b)    for b in unique_right_keys]
     )
