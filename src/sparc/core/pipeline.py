@@ -225,7 +225,7 @@ def spectral_step(state: SparcState, config: SparcConfig) -> SparcState:
 
 
 def selection_step(state: SparcState, config: SparcConfig) -> SparcState:
-    """Select one representative ROI per spectral cluster."""
+    """Select one representative ROI per spectral cluster, then compute left-camera rects."""
     if state.clustering_result is None:
         raise ValueError("No clustering results. Run spectral_step first.")
 
@@ -242,12 +242,28 @@ def selection_step(state: SparcState, config: SparcConfig) -> SparcState:
         selected_stds    = state.roi_stds
         selected_spectra = state.roi_spectra
 
-    state.roi_indices    = select_representative_rois(
+    state.roi_indices   = select_representative_rois(
         selected_rois, selected_stds, state.clustering_result['labels']
     )
-    state.final_rois     = selected_rois[state.roi_indices]
-    state.final_spectra  = selected_spectra[state.roi_indices]
-    state.final_stds     = selected_stds[state.roi_indices]
+    state.final_rois    = selected_rois[state.roi_indices]
+    state.final_spectra = selected_spectra[state.roi_indices]
+    state.final_stds    = selected_stds[state.roi_indices]
+
+    # Compute the inscribed left-camera rect for every final ROI.
+    # These are the actual pixel regions used for left-camera spectral contributions.
+    homography = state.load_result.get('homography_matrix')
+    if homography is not None:
+        from ..utils.geometry import right_rect_to_left_inscribed
+        left_rois = []
+        for roi in state.final_rois:
+            left_rect = right_rect_to_left_inscribed(tuple(roi), homography)
+            # Fall back to the homography-approximated bbox if inscribed fails.
+            if left_rect is None:
+                left_rect = roi
+            left_rois.append(left_rect)
+        state.final_left_rois = np.array(left_rois)
+    else:
+        state.final_left_rois = state.final_rois.copy()
 
     logger.info(
         f"Selected {len(state.final_rois)} final ROIs "

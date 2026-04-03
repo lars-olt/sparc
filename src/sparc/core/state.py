@@ -54,6 +54,7 @@ class SparcState:
 
     # Selection stage
     roi_indices: Optional[List[int]] = None
-    final_rois: Optional[np.ndarray] = None
+    final_rois: Optional[np.ndarray] = None       # right-camera space
+    final_left_rois: Optional[np.ndarray] = None  # left-camera inscribed rects
     final_spectra: Optional[np.ndarray] = None
     final_stds: Optional[np.ndarray] = None

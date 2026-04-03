@@ -25,6 +25,13 @@ class LoadResult(TypedDict):
     left_rgb_img: np.ndarray
     right_rgb_img: np.ndarray
     id: str
+    instrument: str
+    left_band_keys: list   # ordered band names along left_cube axis-0
+    right_band_keys: list  # ordered band names along right_cube axis-0
+    # Each entry is (source, name, left_key, right_key) in merged-cube order.
+    # source: 'stereo' | 'left_only' | 'right_only'
+    # left_key / right_key: band name in the respective raw cube, or None.
+    merged_band_recipe: list
 
 
 BAD_PIXEL_VALUES = tuple(
@@ -84,12 +91,15 @@ def _load_zcam_cube(
     else:
         bands = base_bands
 
-    left_cube = np.array([a for b, a in bands.items() if b.startswith("L")])
-    right_cube = np.array([a for b, a in bands.items() if b.startswith("R")])
+    left_band_keys  = [b for b in bands if b.startswith("L")]
+    right_band_keys = [b for b in bands if b.startswith("R")]
 
-    left_raw = np.array([a for b, a in base_bands.items() if b.startswith("L")])
-    right_raw = np.array([a for b, a in base_bands.items() if b.startswith("R")])
-    left_rgb_img = create_rgb_stretch(left_raw)
+    left_cube  = np.array([bands[b] for b in left_band_keys])
+    right_cube = np.array([bands[b] for b in right_band_keys])
+
+    left_raw  = np.array([base_bands[b] for b in left_band_keys])
+    right_raw = np.array([base_bands[b] for b in right_band_keys])
+    left_rgb_img  = create_rgb_stretch(left_raw)
     right_rgb_img = create_rgb_stretch(right_raw)
 
     homography_matrix = compute_homography(
@@ -100,33 +110,46 @@ def _load_zcam_cube(
     )
 
     last_shared_index = sorted(bandset.raw).index(SHARED_BANDS["L"])
-    homography_mask = np.array(left_cube_aligned[last_shared_index] == 0)
-    aligned_cube = merge_left_right_cubes(
+    homography_mask   = np.array(left_cube_aligned[last_shared_index] == 0)
+    aligned_cube      = merge_left_right_cubes(
         left_cube_aligned, right_cube, last_shared_index
     )
 
-    wl_lookup = bandset.metadata.set_index("BAND")["WAVELENGTH"].to_dict()
-    left_bands = [b for b in bands if b.startswith("L")]
-    right_bands = [b for b in bands if b.startswith("R")]
-    shared_wls = [wl_lookup[b] for b in left_bands[: last_shared_index + 1]]
-    unique_left_wls = [wl_lookup[b] for b in left_bands[last_shared_index + 1 :]]
-    unique_right_wls = [wl_lookup[b] for b in right_bands[last_shared_index + 1 :]]
-    bandset._sparc_wavelengths = shared_wls + unique_left_wls + unique_right_wls
+    wl_lookup         = bandset.metadata.set_index("BAND")["WAVELENGTH"].to_dict()
+    shared_keys       = left_band_keys[: last_shared_index + 1]
+    unique_left_keys  = left_band_keys[last_shared_index + 1 :]
+    unique_right_keys = right_band_keys[last_shared_index + 1 :]
+
+    bandset._sparc_wavelengths = (
+        [wl_lookup[b] for b in shared_keys]
+        + [wl_lookup[b] for b in unique_left_keys]
+        + [wl_lookup[b] for b in unique_right_keys]
+    )
+
+    # Recipe maps each merged-cube band to its source(s) in left_cube / right_cube.
+    merged_band_recipe = (
+        [('stereo',     b, b,    b)    for b in shared_keys]
+        + [('left_only',  b, b,    None) for b in unique_left_keys]
+        + [('right_only', b, None, b)    for b in unique_right_keys]
+    )
 
     return {
-        "cube": aligned_cube,
-        "left_cube": left_cube,
-        "right_cube": right_cube,
-        "left_cube_aligned": left_cube_aligned,
-        "base_bands": base_bands,
-        "bandset": bandset,
-        "homography_mask": homography_mask,
-        "homography_matrix": homography_matrix,
-        "rgb_img": right_rgb_img,
-        "left_rgb_img": left_rgb_img,
-        "right_rgb_img": right_rgb_img,
-        "id": scene_id,
-        "instrument": "ZCAM",
+        "cube":               aligned_cube,
+        "left_cube":          left_cube,
+        "right_cube":         right_cube,
+        "left_cube_aligned":  left_cube_aligned,
+        "base_bands":         base_bands,
+        "bandset":            bandset,
+        "homography_mask":    homography_mask,
+        "homography_matrix":  homography_matrix,
+        "rgb_img":            right_rgb_img,
+        "left_rgb_img":       left_rgb_img,
+        "right_rgb_img":      right_rgb_img,
+        "id":                 scene_id,
+        "instrument":         "ZCAM",
+        "left_band_keys":     left_band_keys,
+        "right_band_keys":    right_band_keys,
+        "merged_band_recipe": merged_band_recipe,
     }
 
 
@@ -160,20 +183,18 @@ def _load_pcam_cube(iof_path, seq_id, obs_ix, rgb_bands):
     scene_id = bandset.name
 
     STEREO_PAIRS = [("L2", "R2"), ("L7", "R1")]
-    stereo_left = {l for l, r in STEREO_PAIRS}
+    stereo_left  = {l for l, r in STEREO_PAIRS}
     stereo_right = {r for l, r in STEREO_PAIRS}
     wl_lookup = bandset.metadata.set_index("BAND")["WAVELENGTH"].to_dict()
 
-    # Convert raw DNs → IOF using per-file PDS label scale and offset.
-    # Values 0 (MISSING) and 4095 (INVALID) are masked per FLAG_VALUES_VAL.
     bands = {}
     first_label = None
     for _, row in bandset.metadata.iterrows():
-        band = row["BAND"]
+        band  = row["BAND"]
         label = pdr.Data(row["PATH"]).metadata
         if first_label is None:
             first_label = label
-        scale = label["DERIVED_IMAGE_PARMS"]["RADIANCE_SCALING_FACTOR"]
+        scale  = label["DERIVED_IMAGE_PARMS"]["RADIANCE_SCALING_FACTOR"]
         offset = label["DERIVED_IMAGE_PARMS"]["RADIANCE_OFFSET"]
         dn = bandset.get_band(band).copy().astype(np.float32)
         dn = np.where((dn == 0) | (dn == 4095), np.nan, dn)
@@ -181,16 +202,15 @@ def _load_pcam_cube(iof_path, seq_id, obs_ix, rgb_bands):
 
     bandset._sparc_label = first_label
 
-    left_keys = sorted(b for b in bands if b.startswith("L"))
-    right_keys = sorted(b for b in bands if b.startswith("R"))
+    left_band_keys  = sorted(b for b in bands if b.startswith("L"))
+    right_band_keys = sorted(b for b in bands if b.startswith("R"))
 
-    left_cube = np.array([bands[b] for b in left_keys])
-    right_cube = np.array([bands[b] for b in right_keys])
+    left_cube  = np.array([bands[b] for b in left_band_keys])
+    right_cube = np.array([bands[b] for b in right_band_keys])
 
-    left_safe = np.where(np.isfinite(left_cube), left_cube, 0.0)
+    left_safe  = np.where(np.isfinite(left_cube),  left_cube,  0.0)
     right_safe = np.where(np.isfinite(right_cube), right_cube, 0.0)
 
-    # Align left camera onto right frame using L7/R1 as the anchor pair.
     homography_matrix = compute_homography(
         np.where(np.isfinite(bands["L7"]), bands["L7"], 0.0),
         np.where(np.isfinite(bands["R1"]), bands["R1"], 0.0),
@@ -198,48 +218,57 @@ def _load_pcam_cube(iof_path, seq_id, obs_ix, rgb_bands):
     left_cube_aligned = apply_homography(
         left_safe, homography_matrix, right_cube[0].shape
     )
-    homography_mask = left_cube_aligned[left_keys.index("L7")] == 0
-    aligned = {b: left_cube_aligned[i] for i, b in enumerate(left_keys)}
+    homography_mask = left_cube_aligned[left_band_keys.index("L7")] == 0
+    aligned = {b: left_cube_aligned[i] for i, b in enumerate(left_band_keys)}
 
-    # Merge stereo pairs then append remaining singles.
-    merged_bands = {}
+    # Build merged cube, wavelengths, and recipe in lock-step.
+    merged_arrays      = []
     merged_wavelengths = []
+    merged_band_recipe = []
 
     for l_band, r_band in STEREO_PAIRS:
-        key = f"{l_band}+{r_band}"
-        merged_bands[key] = np.nanmean(
-            np.stack([aligned[l_band], bands[r_band]], axis=0), axis=0
+        merged_arrays.append(
+            np.nanmean(np.stack([aligned[l_band], bands[r_band]], axis=0), axis=0)
         )
         merged_wavelengths.append((wl_lookup[l_band] + wl_lookup[r_band]) / 2)
+        merged_band_recipe.append(('stereo', f"{l_band}+{r_band}", l_band, r_band))
 
-    for b in (k for k in left_keys if k not in stereo_left):
-        merged_bands[b] = aligned[b]
-        merged_wavelengths.append(wl_lookup[b])
+    unique_left_keys  = [k for k in left_band_keys  if k not in stereo_left]
+    unique_right_keys = [k for k in right_band_keys if k not in stereo_right]
 
-    for b in (k for k in right_keys if k not in stereo_right):
-        merged_bands[b] = bands[b]
+    for b in unique_left_keys:
+        merged_arrays.append(aligned[b])
         merged_wavelengths.append(wl_lookup[b])
+        merged_band_recipe.append(('left_only', b, b, None))
+
+    for b in unique_right_keys:
+        merged_arrays.append(bands[b])
+        merged_wavelengths.append(wl_lookup[b])
+        merged_band_recipe.append(('right_only', b, None, b))
 
     bandset._sparc_wavelengths = merged_wavelengths
-    cube = np.array(list(merged_bands.values()))
+    cube = np.array(merged_arrays)
 
-    left_rgb_img = _pcam_rgb(bands["L2"], bands["L5"], bands["L6"])
+    left_rgb_img  = _pcam_rgb(bands["L2"], bands["L5"], bands["L6"])
     right_rgb_img = _pcam_rgb(bands["R2"], bands["R1"], bands["R1"])
 
     return {
-        "cube": cube,
-        "left_cube": left_safe,
-        "right_cube": right_safe,
-        "left_cube_aligned": left_cube_aligned,
-        "base_bands": bands,
-        "bandset": bandset,
-        "homography_mask": homography_mask,
-        "homography_matrix": homography_matrix,
-        "rgb_img": left_rgb_img,
-        "left_rgb_img": left_rgb_img,
-        "right_rgb_img": right_rgb_img,
-        "id": scene_id,
-        "instrument": "PCAM",
+        "cube":               cube,
+        "left_cube":          left_safe,
+        "right_cube":         right_safe,
+        "left_cube_aligned":  left_cube_aligned,
+        "base_bands":         bands,
+        "bandset":            bandset,
+        "homography_mask":    homography_mask,
+        "homography_matrix":  homography_matrix,
+        "rgb_img":            left_rgb_img,
+        "left_rgb_img":       left_rgb_img,
+        "right_rgb_img":      right_rgb_img,
+        "id":                 scene_id,
+        "instrument":         "PCAM",
+        "left_band_keys":     left_band_keys,
+        "right_band_keys":    right_band_keys,
+        "merged_band_recipe": merged_band_recipe,
     }
 
 
@@ -252,13 +281,9 @@ def merge_left_right_cubes(
     left_cube: np.ndarray, right_cube: np.ndarray, last_shared_index: int
 ) -> np.ndarray:
     """Average shared bands and concatenate unique left and right bands."""
-    shared = [(left_cube[i] + right_cube[i]) / 2 for i in range(last_shared_index + 1)]
-    unique_left = [
-        left_cube[i] for i in range(last_shared_index + 1, left_cube.shape[0])
-    ]
-    unique_right = [
-        right_cube[i] for i in range(last_shared_index + 1, right_cube.shape[0])
-    ]
+    shared       = [(left_cube[i] + right_cube[i]) / 2 for i in range(last_shared_index + 1)]
+    unique_left  = [left_cube[i]  for i in range(last_shared_index + 1, left_cube.shape[0])]
+    unique_right = [right_cube[i] for i in range(last_shared_index + 1, right_cube.shape[0])]
     return np.array(shared + unique_left + unique_right)
 
 
@@ -266,14 +291,12 @@ def apply_homography(
     source_cube: np.ndarray, homography_matrix: np.ndarray, target_shape: tuple
 ) -> np.ndarray:
     """Warp every band in source_cube into the target frame."""
-    return np.array(
-        [
-            cv2.warpPerspective(
-                source_cube[i], homography_matrix, (target_shape[1], target_shape[0])
-            )
-            for i in range(source_cube.shape[0])
-        ]
-    )
+    return np.array([
+        cv2.warpPerspective(
+            source_cube[i], homography_matrix, (target_shape[1], target_shape[0])
+        )
+        for i in range(source_cube.shape[0])
+    ])
 
 
 def compute_homography(
@@ -306,7 +329,7 @@ def apply_pixel_masks(
     bands: Dict[str, np.ndarray], pixmaps: Dict[str, np.ndarray]
 ) -> Dict[str, np.ndarray]:
     """Replace bad pixels with NaN using per-camera pixmap masks."""
-    left_mask = create_bad_pixel_mask(pixmaps, "L")
+    left_mask  = create_bad_pixel_mask(pixmaps, "L")
     right_mask = create_bad_pixel_mask(pixmaps, "R")
     return {
         b: np.where(left_mask if b.startswith("L") else right_mask, np.nan, a)
@@ -316,8 +339,7 @@ def apply_pixel_masks(
 
 def create_rgb_stretch(cube: np.ndarray) -> np.ndarray:
     from marslab.imgops.imgutils import enhance_color
-
-    rgb = np.stack([cube[2], cube[1], cube[0]], axis=-1)
+    rgb    = np.stack([cube[2], cube[1], cube[0]], axis=-1)
     result = enhance_color(np.ma.masked_invalid(rgb), bounds=(0, 1), stretch=0.1)
     filled = np.ma.filled(result, 0)
     return np.ascontiguousarray(filled * 255, dtype=np.uint8)
