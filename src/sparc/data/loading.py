@@ -83,11 +83,12 @@ def _load_zcam_cube(
     base_bands = {b: crop(bandset.get_band(b), ZCAM_CROP).copy() for b in filters}
 
     if do_apply_pixmaps:
-        pixmaps = {
-            b: crop(bandset.pixmaps[b], ZCAM_CROP).copy()
-            for b in sorted(bandset.metadata["FILTER"].unique())
-            if b in bandset.pixmaps
-        }
+        pixmaps = {}
+        for b in sorted(bandset.metadata["FILTER"].unique()):
+            try:
+                pixmaps[b] = crop(bandset.pixmaps[b], ZCAM_CROP).copy()
+            except (KeyError, Exception):
+                pass
         bands = apply_pixel_masks(base_bands, pixmaps)
     else:
         bands = base_bands
@@ -129,7 +130,7 @@ def _load_zcam_cube(
 
     # Recipe maps each merged-cube band to its source(s) in left_cube / right_cube.
     merged_band_recipe = (
-        [('stereo',     b, b,    right_band_keys[i])    for i, b in enumerate(shared_keys)]
+        [('stereo', b, b, right_band_keys[i]) for i, b in enumerate(shared_keys)]
         + [('left_only',  b, b,    None) for b in unique_left_keys]
         + [('right_only', b, None, b)    for b in unique_right_keys]
     )
@@ -318,11 +319,14 @@ def compute_homography(
     return homography
 
 
-def create_bad_pixel_mask(pixmaps: Dict[str, np.ndarray], camera: str) -> np.ndarray:
+def create_bad_pixel_mask(pixmaps: Dict[str, np.ndarray], camera: str, shape=None) -> np.ndarray:
     """Union of bad-pixel masks across all bands for a given camera."""
     masks = [
         np.isin(v, BAD_PIXEL_VALUES) for k, v in pixmaps.items() if k.startswith(camera)
     ]
+    if not masks:
+        # No pixmaps for this camera — return an all-clear mask of the correct shape.
+        return np.zeros(shape or (1, 1), dtype=bool)
     return np.any(np.dstack(masks), axis=2)
 
 
@@ -330,8 +334,9 @@ def apply_pixel_masks(
     bands: Dict[str, np.ndarray], pixmaps: Dict[str, np.ndarray]
 ) -> Dict[str, np.ndarray]:
     """Replace bad pixels with NaN using per-camera pixmap masks."""
-    left_mask  = create_bad_pixel_mask(pixmaps, "L")
-    right_mask = create_bad_pixel_mask(pixmaps, "R")
+    shape = next(iter(bands.values())).shape
+    left_mask  = create_bad_pixel_mask(pixmaps, "L", shape)
+    right_mask = create_bad_pixel_mask(pixmaps, "R", shape)
     return {
         b: np.where(left_mask if b.startswith("L") else right_mask, np.nan, a)
         for b, a in bands.items()
