@@ -86,6 +86,7 @@ def _load_zcam_cube(
         pixmaps = {
             b: crop(bandset.pixmaps[b], ZCAM_CROP).copy()
             for b in sorted(bandset.metadata["FILTER"].unique())
+            if b in bandset.pixmaps
         }
         bands = apply_pixel_masks(base_bands, pixmaps)
     else:
