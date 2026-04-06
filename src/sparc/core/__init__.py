@@ -14,7 +14,7 @@ from .config import (
     ROIBackend,
 )
 from .state import SparcState
-from .result import SparcResult, plot_result, export_spectra_csv, export_rois_json
+from .result import SparcResult, plot_result, export_spectra_csv, export_rois_json, export_sel
 from .logging_utils import setup_logger
 from .constants import (
     WAVELENGTHS,
@@ -56,6 +56,7 @@ __all__ = [
     'plot_result',
     'export_spectra_csv',
     'export_rois_json',
+    'export_sel',
     
     # Utilities
     'setup_logger',

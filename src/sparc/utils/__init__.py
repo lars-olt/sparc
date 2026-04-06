@@ -32,6 +32,8 @@ from .pancam_helpers import (
     get_pcam_bandset,
 )
 
+from .sel_writer import export_sel
+
 __all__ = [
     # Array operations
     'mask_cube',
@@ -63,4 +65,6 @@ __all__ = [
     'parse_pcam_fn',
     'scan_pcam_files',
     'get_pcam_bandset',
+    
+    'export_sel'
 ]
