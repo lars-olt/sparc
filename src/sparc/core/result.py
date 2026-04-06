@@ -140,14 +140,18 @@ def export_sel(result: SparcResult, output_path: str, template_path: Optional[st
 
     if instrument in {"ZCAM", "MCZ"} and load_result is not None:
         # ZCAM_CROP = (left, right, top, bottom). The pipeline crops the raw
-        # 1648x1200 frame before processing, so we add the offsets back here.
+        # frame before processing, so ROI coordinates are in cropped space and
+        # must be shifted back to full-sensor coordinates before writing.
         from asdf_settings import rapidlooks
-        crop     = rapidlooks.CROP_SETTINGS["crop"]
-        col_off  = crop[0]
-        row_off  = crop[2]
-
+        crop           = rapidlooks.CROP_SETTINGS["crop"]
+        col_off        = crop[0]   # left crop = x offset
+        row_off        = crop[2]   # top crop  = y offset
         raw_band       = next(iter(load_result["base_bands"].values()))
-        full_H, full_W = raw_band.shape
+        cropped_H, cropped_W = raw_band.shape
+        # The band is already cropped; reconstruct full sensor size by adding
+        # the margins back: crop = (left, right, top, bottom).
+        full_H = cropped_H + crop[2] + crop[3]
+        full_W = cropped_W + crop[0] + crop[1]
     else:
         col_off, row_off = 0, 0
         full_H, full_W   = result.rgb_img.shape[:2]
@@ -155,7 +159,7 @@ def export_sel(result: SparcResult, output_path: str, template_path: Optional[st
     def _shift(rois: np.ndarray) -> np.ndarray:
         if rois.size == 0:
             return np.zeros((0, 4), dtype=np.int32)
-        shifted      = rois.copy().astype(np.int32)
+        shifted        = rois.copy().astype(np.int32)
         shifted[:, 0] += col_off
         shifted[:, 1] += row_off
         return shifted
