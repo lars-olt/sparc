@@ -1,4 +1,4 @@
-"""ROI extraction functionality with optional parallel processing."""
+"""ROI extraction with optional parallel processing."""
 
 import numpy as np
 from scipy.ndimage import binary_opening
@@ -8,243 +8,154 @@ from ..utils.threading import run_parallel
 
 
 def extract_rois(segmented_img: np.ndarray,
-                masked_cube: np.ndarray,
-                edge_offset: int,
-                allowed_variance: float,
-                use_threading: bool = False,
-                n_threads: Optional[int] = None,
-                min_segment_size: int = 50,
-                min_cluster_area: int = 500,
-                min_clean_area: int = 4000,
-                morph_opening_threshold: int = 1000,
-                max_subclusters: int = 10,
-                subcluster_area_divisor: int = 1000) -> np.ndarray:
-    """
-    Extract potential regions of interest from segmented image.
+                 masked_cube: np.ndarray,
+                 edge_offset: int,
+                 allowed_variance: float,
+                 use_threading: bool = False,
+                 n_threads: Optional[int] = None,
+                 min_segment_size: int = 50,
+                 min_cluster_area: int = 500,
+                 min_clean_area: int = 4000,
+                 morph_opening_threshold: int = 1000,
+                 max_subclusters: int = 10,
+                 subcluster_area_divisor: int = 1000) -> np.ndarray:
 
-    Args:
-        segmented_img: SAM segmentation results
-        masked_cube: Preprocessed masked hyperspectral cube
-        edge_offset: Offset from image edges to avoid
-        allowed_variance: Maximum variance allowed in clustering
-        use_threading: Use parallel processing
-        n_threads: Number of worker threads
-        min_segment_size: Skip segments smaller than this
-        min_cluster_area: Minimum area to attempt sub-clustering
-        min_clean_area: Minimum area after cleaning to sub-cluster
-        morph_opening_threshold: Area threshold to apply morph opening
-        max_subclusters: Absolute max sub-clusters per segment
-        subcluster_area_divisor: Divisor for density-based clustering
-
-    Returns:
-        Array of ROI coordinates in (x, y, width, height) format
-    """
-    params = {
-        'min_segment_size':       min_segment_size,
-        'min_cluster_area':       min_cluster_area,
-        'min_clean_area':         min_clean_area,
-        'morph_opening_threshold': morph_opening_threshold,
-        'max_subclusters':        max_subclusters,
-        'subcluster_area_divisor': subcluster_area_divisor,
-    }
+    params = dict(
+        min_segment_size        = min_segment_size,
+        min_cluster_area        = min_cluster_area,
+        min_clean_area          = min_clean_area,
+        morph_opening_threshold = morph_opening_threshold,
+        max_subclusters         = max_subclusters,
+        subcluster_area_divisor = subcluster_area_divisor,
+    )
 
     if use_threading:
         return extract_rois_threaded(
-            segmented_img, masked_cube, edge_offset, allowed_variance,
-            n_threads, **params
+            segmented_img, masked_cube, edge_offset, allowed_variance, n_threads, **params
         )
-    else:
-        return extract_rois_sequential(
-            segmented_img, masked_cube, edge_offset, allowed_variance,
-            **params
-        )
+    return extract_rois_sequential(
+        segmented_img, masked_cube, edge_offset, allowed_variance, **params
+    )
 
 
-def extract_rois_sequential(segmented_img: np.ndarray,
-                            masked_cube: np.ndarray,
-                            edge_offset: int,
-                            allowed_variance: float,
-                            min_segment_size: int = 50,
-                            min_cluster_area: int = 500,
-                            min_clean_area: int = 4000,
-                            morph_opening_threshold: int = 1000,
-                            max_subclusters: int = 10,
-                            subcluster_area_divisor: int = 1000) -> np.ndarray:
-    """Extract ROIs sequentially (single-threaded)."""
+def extract_rois_sequential(segmented_img, masked_cube, edge_offset, allowed_variance,
+                             min_segment_size=50, min_cluster_area=500, min_clean_area=4000,
+                             morph_opening_threshold=1000, max_subclusters=10,
+                             subcluster_area_divisor=1000):
     from ..utils.geometry import get_roi
 
     full_mask = masked_cube.mask[0]
-    rois = []
+    rois      = []
 
-    segment_ids, segment_sizes = np.unique(segmented_img, return_counts=True)
-
-    for segment_id, segment_size in zip(segment_ids, segment_sizes):
-        if segment_size < min_segment_size:
+    for seg_id, seg_size in zip(*np.unique(segmented_img, return_counts=True)):
+        if seg_size < min_segment_size:
             continue
-
-        segment_mask = [segmented_img == segment_id]
-
-        cluster_result = cluster_segment(
-            segment_mask, full_mask, masked_cube,
+        result = cluster_segment(
+            [segmented_img == seg_id], full_mask, masked_cube,
             edge_offset, allowed_variance,
             min_cluster_area, min_clean_area,
-            morph_opening_threshold, max_subclusters, subcluster_area_divisor
+            morph_opening_threshold, max_subclusters, subcluster_area_divisor,
         )
-
-        if cluster_result is None:
+        if result is None:
             continue
-
-        clusters, n_clusters = cluster_result
-
-        for cluster_id in range(n_clusters):
-            cluster_mask = (clusters.data == cluster_id) & ~clusters.mask
-            _, roi = get_roi(cluster_mask)
+        clusters, n_clusters = result
+        for cid in range(n_clusters):
+            mask = (clusters.data == cid) & ~clusters.mask
+            _, roi = get_roi(mask)
             rois.append(roi)
 
     return np.array(rois) if rois else np.array([])
 
 
-def extract_rois_threaded(segmented_img: np.ndarray,
-                          masked_cube: np.ndarray,
-                          edge_offset: int,
-                          allowed_variance: float,
-                          n_threads: Optional[int],
-                          min_segment_size: int = 50,
-                          min_cluster_area: int = 500,
-                          min_clean_area: int = 4000,
-                          morph_opening_threshold: int = 1000,
-                          max_subclusters: int = 10,
-                          subcluster_area_divisor: int = 1000) -> np.ndarray:
-    """Extract ROIs using thread-based parallelism."""
+def extract_rois_threaded(segmented_img, masked_cube, edge_offset, allowed_variance,
+                           n_threads, min_segment_size=50, min_cluster_area=500,
+                           min_clean_area=4000, morph_opening_threshold=1000,
+                           max_subclusters=10, subcluster_area_divisor=1000):
     from ..utils.geometry import get_roi
 
-    full_mask = masked_cube.mask[0]
+    full_mask  = masked_cube.mask[0]
+    ids, sizes = np.unique(segmented_img, return_counts=True)
+    valid      = [(i, s) for i, s in zip(ids, sizes) if s >= min_segment_size]
 
-    segment_ids, segment_sizes = np.unique(segmented_img, return_counts=True)
-    valid_segments = [
-        (seg_id, size) for seg_id, size in zip(segment_ids, segment_sizes)
-        if size >= min_segment_size
-    ]
-
-    def process_segment(segment_info):
-        segment_id, _ = segment_info
-        segment_mask = [segmented_img == segment_id]
-
-        cluster_result = cluster_segment(
-            segment_mask, full_mask, masked_cube,
+    def process(seg_info):
+        seg_id, _ = seg_info
+        result = cluster_segment(
+            [segmented_img == seg_id], full_mask, masked_cube,
             edge_offset, allowed_variance,
             min_cluster_area, min_clean_area,
-            morph_opening_threshold, max_subclusters, subcluster_area_divisor
+            morph_opening_threshold, max_subclusters, subcluster_area_divisor,
         )
-
-        if cluster_result is None:
+        if result is None:
             return []
+        clusters, n_clusters = result
+        rois = []
+        for cid in range(n_clusters):
+            mask = (clusters.data == cid) & ~clusters.mask
+            _, roi = get_roi(mask)
+            rois.append(roi)
+        return rois
 
-        clusters, n_clusters = cluster_result
-        segment_rois = []
-
-        for cluster_id in range(n_clusters):
-            cluster_mask = (clusters.data == cluster_id) & ~clusters.mask
-            _, roi = get_roi(cluster_mask)
-            segment_rois.append(roi)
-
-        return segment_rois
-
-    results = run_parallel(
-        process_segment,
-        valid_segments,
-        n_jobs=n_threads,
-        backend="thread"
-    )
-
-    all_rois = [roi for roi_list in results for roi in roi_list]
+    all_rois = [roi for batch in run_parallel(process, valid, n_jobs=n_threads, backend="thread")
+                for roi in batch]
     return np.array(all_rois) if all_rois else np.array([])
 
 
-def cluster_segment(segment_mask: list,
-                    full_mask: np.ndarray,
-                    spectral_cube: np.ndarray,
-                    edge_offset: int,
-                    allowed_variance: float,
-                    min_cluster_area: int,
-                    min_clean_area: int,
-                    morph_opening_threshold: int,
-                    max_subclusters: int,
-                    subcluster_area_divisor: int) -> Optional[Tuple]:
-    """Cluster segment spectrally to find homogeneous sub-regions."""
+def cluster_segment(segment_mask, full_mask, spectral_cube, edge_offset, allowed_variance,
+                     min_cluster_area, min_clean_area, morph_opening_threshold,
+                     max_subclusters, subcluster_area_divisor):
     from ..utils.array_ops import mask_cube
 
     cluster_mask = prepare_cluster_mask(segment_mask[0], full_mask, edge_offset)
-    initial_area = np.count_nonzero(cluster_mask)
+    area         = np.count_nonzero(cluster_mask)
 
-    if initial_area == 0:
+    if area == 0:
         return None
-
-    if initial_area < min_cluster_area:
+    if area < min_cluster_area:
         return create_single_cluster_result(cluster_mask)
 
-    cleaned_mask = clean_mask(cluster_mask, initial_area, morph_opening_threshold)
-    area = np.count_nonzero(cleaned_mask)
+    cluster_mask = clean_mask(cluster_mask, area, morph_opening_threshold)
+    area         = np.count_nonzero(cluster_mask)
 
     if area < min_clean_area:
-        return create_single_cluster_result(cleaned_mask)
+        return create_single_cluster_result(cluster_mask)
 
-    masked_img = mask_cube(spectral_cube, ~cluster_mask)
-
-    density_limit = area // subcluster_area_divisor
-    max_clusters  = max(2, min(max_subclusters, density_limit))
-
-    return find_optimal_clusters(masked_img, max_clusters, allowed_variance)
+    max_k = max(2, min(max_subclusters, area // subcluster_area_divisor))
+    return find_optimal_clusters(mask_cube(spectral_cube, ~cluster_mask), max_k, allowed_variance)
 
 
 def prepare_cluster_mask(segment_mask: np.ndarray,
-                         full_mask: np.ndarray,
-                         edge_offset: int) -> np.ndarray:
-    """Prepare mask for clustering by removing shadows and edges."""
+                          full_mask: np.ndarray,
+                          edge_offset: int) -> np.ndarray:
     from ..utils.geometry import get_edge_mask
-
-    cluster_mask = segment_mask.copy()
-    cluster_mask[full_mask] = 0
-
-    edge_mask = get_edge_mask(cluster_mask.shape, edge_offset)
-    return cluster_mask & edge_mask
+    mask = segment_mask.copy()
+    mask[full_mask] = 0
+    return mask & get_edge_mask(mask.shape, edge_offset)
 
 
 def clean_mask(mask: np.ndarray, area: int, threshold: int) -> np.ndarray:
-    """Apply morphological cleaning to mask."""
     if area > threshold:
-        kernel = np.ones((3, 3))
-        return binary_opening(mask, structure=kernel)
+        return binary_opening(mask, structure=np.ones((3, 3)))
     return mask
 
 
 def create_single_cluster_result(mask: np.ndarray) -> Tuple:
-    """Create result for single-cluster segment."""
-    cluster_array = np.ma.masked_array(
-        np.zeros_like(mask, dtype=np.int32),
-        mask=~mask
-    )
-    return cluster_array, 1
+    return np.ma.masked_array(np.zeros_like(mask, dtype=np.int32), mask=~mask), 1
 
 
 def find_optimal_clusters(masked_img: np.ma.MaskedArray,
-                          max_clusters: int,
-                          allowed_variance: float) -> Tuple:
+                           max_clusters: int,
+                           allowed_variance: float) -> Tuple:
     """
-    Find optimal number of clusters using variance threshold.
-
-    Starts at k=1 and increments until variance exceeds the threshold or
-    max_clusters is reached. Always returns a valid result: if k=1 already
-    exceeds the threshold, the single-cluster solution is returned.
+    Increment k until variance exceeds the threshold or we hit max_clusters.
+    Always returns a valid result - k=1 is the floor.
     """
     from ..utils.array_ops import apply_kmeans_to_masked
 
-    best_classification = apply_kmeans_to_masked(masked_img, 1)
-
+    best = apply_kmeans_to_masked(masked_img, 1)
     for k in range(2, max_clusters + 1):
         candidate = apply_kmeans_to_masked(masked_img, k)
         if np.var(candidate) >= allowed_variance:
             break
-        best_classification = candidate
+        best = candidate
 
-    return best_classification, k - 1
+    return best, k - 1
