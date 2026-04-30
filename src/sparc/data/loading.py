@@ -2,6 +2,7 @@
 
 import numpy as np
 import cv2
+import pandas as pd
 from pathlib import Path
 from typing import TypedDict, Optional, Dict
 from rapid.helpers import get_zcam_bandset
@@ -13,24 +14,21 @@ from ..core.constants import SHARED_BANDS, BAD_PIXEL_FLAGS
 
 
 class LoadResult(TypedDict):
-    cube: np.ndarray
-    left_cube: np.ndarray
-    right_cube: np.ndarray
-    left_cube_aligned: np.ndarray
-    base_bands: Dict[str, np.ndarray]
-    bandset: object
-    homography_mask: np.ndarray
-    homography_matrix: np.ndarray
-    rgb_img: np.ndarray
-    left_rgb_img: np.ndarray
-    right_rgb_img: np.ndarray
-    id: str
-    instrument: str
-    left_band_keys: list   # ordered band names along left_cube axis-0
-    right_band_keys: list  # ordered band names along right_cube axis-0
-    # Each entry is (source, name, left_key, right_key) in merged-cube order.
-    # source: 'stereo' | 'left_only' | 'right_only'
-    # left_key / right_key: band name in the respective raw cube, or None.
+    cube:               np.ndarray
+    left_cube:          np.ndarray
+    right_cube:         np.ndarray
+    left_cube_aligned:  np.ndarray
+    base_bands:         Dict[str, np.ndarray]
+    bandset:            object
+    homography_mask:    np.ndarray
+    homography_matrix:  np.ndarray
+    rgb_img:            np.ndarray
+    left_rgb_img:       np.ndarray
+    right_rgb_img:      np.ndarray
+    id:                 str
+    instrument:         str
+    left_band_keys:     list
+    right_band_keys:    list
     merged_band_recipe: list
 
 
@@ -41,6 +39,47 @@ BAD_PIXEL_VALUES = tuple(
 )
 
 ZCAM_CROP = rapidlooks.CROP_SETTINGS["crop"]
+
+
+def _make_zcam_bandset_fallback(iof_path, seq_id=None):
+    """
+    Build a ZcamBandSet bypassing rapid's cluster_observations.
+    On Windows, asdf computes the stem column from the directory path rather
+    than the file stem, so all files in a scene share one stem and compete as
+    siblings. rate_cal_offset keeps only the single best-scoring file, dropping
+    everything else. This fallback deduplicates per filter directly - one file
+    per filter, chosen by the same cal_offset score - and hands the result
+    straight to ZcamBandSet.
+    """
+    from asdf.scan import scan_zcam_files, rate_cal_offset
+    from asdf.zcam_bandset import ZcamBandSet
+    from functools import reduce
+    from operator import mul
+
+    all_obs = scan_zcam_files(Path(iof_path))
+    if seq_id:
+        all_obs = all_obs[
+            all_obs['SEQ_ID'].str.lower().str.contains(str(seq_id).lower())
+        ]
+
+    # drop off-size subframes (focus/context frames) - keep only the
+    # drop off-size subframes (focus/context frames) - keep only files
+    # with the largest frame size
+    frame_areas = all_obs['SUBFRAME'].map(lambda s: reduce(mul, s[2:]))
+    all_obs     = all_obs[frame_areas == frame_areas.max()]
+
+    keep_rows = []
+    for _filt, group in all_obs.groupby('FILTER'):
+        if len(group) == 1:
+            keep_rows.append(group.iloc[0])
+        else:
+            scores = rate_cal_offset(group)
+            keep_rows.append(group.loc[scores[scores].index[0]])
+
+    deduped = pd.DataFrame(keep_rows).reset_index(drop=True)
+    bs = ZcamBandSet(deduped)
+    bs.format_metadata()
+    return bs
 
 
 def load_cube(
@@ -64,17 +103,21 @@ def load_cube(
 # ZCAM
 # ---------------------------------------------------------------------------
 
-
 def _load_zcam_cube(
     iof_path, seq_id, obs_ix, do_apply_pixmaps, ignore_bayers, rgb_bands
 ):
     search_path = Path(iof_path)
-    bandset = get_zcam_bandset(
+    bandset     = get_zcam_bandset(
         search_path, seq_id=seq_id, observation_ix=obs_ix, load=False
     )
-    scene_id = bandset.name
 
-    filters = bandset.metadata["BAND"].sort_values()
+    # fewer than 3 bands means rapid's clustering rejected most files -
+    # fall back to building the bandset directly
+    if len(bandset.metadata) < 3:
+        bandset = _make_zcam_bandset_fallback(search_path, seq_id)
+
+    scene_id = bandset.name
+    filters  = bandset.metadata["BAND"].sort_values()
     if ignore_bayers:
         filters = filters.loc[~filters.str.contains("0")].reset_index()
 
@@ -99,8 +142,8 @@ def _load_zcam_cube(
     left_cube  = np.array([bands[b] for b in left_band_keys])
     right_cube = np.array([bands[b] for b in right_band_keys])
 
-    left_raw  = np.array([base_bands[b] for b in left_band_keys])
-    right_raw = np.array([base_bands[b] for b in right_band_keys])
+    left_raw      = np.array([base_bands[b] for b in left_band_keys])
+    right_raw     = np.array([base_bands[b] for b in right_band_keys])
     left_rgb_img  = create_rgb_stretch(left_raw)
     right_rgb_img = create_rgb_stretch(right_raw)
 
@@ -111,26 +154,24 @@ def _load_zcam_cube(
         left_cube, homography_matrix, right_cube[0].shape
     )
 
-    last_shared_index = sorted(bandset.raw).index(SHARED_BANDS["L"])
+    last_shared_index = left_band_keys.index(SHARED_BANDS["L"])
     homography_mask   = np.array(left_cube_aligned[last_shared_index] == 0)
     aligned_cube      = merge_left_right_cubes(
         left_cube_aligned, right_cube, last_shared_index
     )
 
     wl_lookup         = bandset.metadata.set_index("BAND")["WAVELENGTH"].to_dict()
-    shared_keys       = left_band_keys[: last_shared_index + 1]
-    unique_left_keys  = left_band_keys[last_shared_index + 1 :]
-    unique_right_keys = right_band_keys[last_shared_index + 1 :]
+    shared_keys       = left_band_keys[:last_shared_index + 1]
+    unique_left_keys  = left_band_keys[last_shared_index + 1:]
+    unique_right_keys = right_band_keys[last_shared_index + 1:]
 
     bandset._sparc_wavelengths = (
         [wl_lookup[b] for b in shared_keys]
         + [wl_lookup[b] for b in unique_left_keys]
         + [wl_lookup[b] for b in unique_right_keys]
     )
-
-    # Recipe maps each merged-cube band to its source(s) in left_cube / right_cube.
     merged_band_recipe = (
-        [('stereo', b, b, right_band_keys[i]) for i, b in enumerate(shared_keys)]
+        [('stereo',     b, b,    right_band_keys[i]) for i, b in enumerate(shared_keys)]
         + [('left_only',  b, b,    None) for b in unique_left_keys]
         + [('right_only', b, None, b)    for b in unique_right_keys]
     )
@@ -159,12 +200,11 @@ def _load_zcam_cube(
 # Pancam
 # ---------------------------------------------------------------------------
 
-
-def _pcam_rgb(r_b: np.ndarray, g_b: np.ndarray, b_b: np.ndarray) -> np.ndarray:
+def _pcam_rgb(r_b, g_b, b_b):
     """Per-channel percentile-stretched RGB from IOF bands."""
     channels = []
     for ch in (r_b, g_b, b_b):
-        ch = np.nan_to_num(ch, nan=0.0)
+        ch    = np.nan_to_num(ch, nan=0.0)
         valid = ch[ch > 0]
         if valid.size > 0:
             lo, hi = np.percentile(valid, [1, 98])
@@ -179,17 +219,15 @@ def _load_pcam_cube(iof_path, seq_id, obs_ix, rgb_bands):
     import pdr
     from ..utils.pancam_helpers import get_pcam_bandset
 
-    bandset = get_pcam_bandset(
-        Path(iof_path), seq_id=seq_id, observation_ix=obs_ix, load=True
-    )
+    bandset  = get_pcam_bandset(Path(iof_path), seq_id=seq_id, observation_ix=obs_ix, load=True)
     scene_id = bandset.name
 
-    STEREO_PAIRS = [("L2", "R2"), ("L7", "R1")]
-    stereo_left  = {l for l, r in STEREO_PAIRS}
-    stereo_right = {r for l, r in STEREO_PAIRS}
-    wl_lookup = bandset.metadata.set_index("BAND")["WAVELENGTH"].to_dict()
+    STEREO_PAIRS  = [("L2", "R2"), ("L7", "R1")]
+    stereo_left   = {l for l, r in STEREO_PAIRS}
+    stereo_right  = {r for l, r in STEREO_PAIRS}
+    wl_lookup     = bandset.metadata.set_index("BAND")["WAVELENGTH"].to_dict()
 
-    bands = {}
+    bands       = {}
     first_label = None
     for _, row in bandset.metadata.iterrows():
         band  = row["BAND"]
@@ -209,7 +247,6 @@ def _load_pcam_cube(iof_path, seq_id, obs_ix, rgb_bands):
 
     left_cube  = np.array([bands[b] for b in left_band_keys])
     right_cube = np.array([bands[b] for b in right_band_keys])
-
     left_safe  = np.where(np.isfinite(left_cube),  left_cube,  0.0)
     right_safe = np.where(np.isfinite(right_cube), right_cube, 0.0)
 
@@ -217,45 +254,38 @@ def _load_pcam_cube(iof_path, seq_id, obs_ix, rgb_bands):
         np.where(np.isfinite(bands["L7"]), bands["L7"], 0.0),
         np.where(np.isfinite(bands["R1"]), bands["R1"], 0.0),
     )
-    left_cube_aligned = apply_homography(
-        left_safe, homography_matrix, right_cube[0].shape
-    )
-    homography_mask = left_cube_aligned[left_band_keys.index("L7")] == 0
-    aligned = {b: left_cube_aligned[i] for i, b in enumerate(left_band_keys)}
+    left_cube_aligned = apply_homography(left_safe, homography_matrix, right_cube[0].shape)
+    homography_mask   = left_cube_aligned[left_band_keys.index("L7")] == 0
+    aligned           = {b: left_cube_aligned[i] for i, b in enumerate(left_band_keys)}
 
-    # Build merged cube, wavelengths, and recipe in lock-step.
     merged_arrays      = []
     merged_wavelengths = []
     merged_band_recipe = []
 
     for l_band, r_band in STEREO_PAIRS:
         merged_arrays.append(
-            np.nanmean(np.stack([aligned[l_band], bands[r_band]], axis=0), axis=0)
+            np.nanmean(np.stack([aligned[l_band], bands[r_band]]), axis=0)
         )
         merged_wavelengths.append((wl_lookup[l_band] + wl_lookup[r_band]) / 2)
         merged_band_recipe.append(('stereo', f"{l_band}+{r_band}", l_band, r_band))
 
-    unique_left_keys  = [k for k in left_band_keys  if k not in stereo_left]
-    unique_right_keys = [k for k in right_band_keys if k not in stereo_right]
-
-    for b in unique_left_keys:
+    for b in (k for k in left_band_keys  if k not in stereo_left):
         merged_arrays.append(aligned[b])
         merged_wavelengths.append(wl_lookup[b])
         merged_band_recipe.append(('left_only', b, b, None))
 
-    for b in unique_right_keys:
+    for b in (k for k in right_band_keys if k not in stereo_right):
         merged_arrays.append(bands[b])
         merged_wavelengths.append(wl_lookup[b])
         merged_band_recipe.append(('right_only', b, None, b))
 
     bandset._sparc_wavelengths = merged_wavelengths
-    cube = np.array(merged_arrays)
 
     left_rgb_img  = _pcam_rgb(bands["L2"], bands["L5"], bands["L6"])
     right_rgb_img = _pcam_rgb(bands["R2"], bands["R1"], bands["R1"])
 
     return {
-        "cube":               cube,
+        "cube":               np.array(merged_arrays),
         "left_cube":          left_safe,
         "right_cube":         right_safe,
         "left_cube_aligned":  left_cube_aligned,
@@ -278,35 +308,32 @@ def _load_pcam_cube(iof_path, seq_id, obs_ix, rgb_bands):
 # Utilities
 # ---------------------------------------------------------------------------
 
-
-def merge_left_right_cubes(
-    left_cube: np.ndarray, right_cube: np.ndarray, last_shared_index: int
-) -> np.ndarray:
+def merge_left_right_cubes(left_cube, right_cube, last_shared_index):
     """Average shared bands and concatenate unique left and right bands."""
-    shared       = [(left_cube[i] + right_cube[i]) / 2 for i in range(last_shared_index + 1)]
-    unique_left  = [left_cube[i]  for i in range(last_shared_index + 1, left_cube.shape[0])]
-    unique_right = [right_cube[i] for i in range(last_shared_index + 1, right_cube.shape[0])]
+    shared       = [(left_cube[i] + right_cube[i]) / 2
+                    for i in range(last_shared_index + 1)]
+    unique_left  = [left_cube[i]
+                    for i in range(last_shared_index + 1, left_cube.shape[0])]
+    unique_right = [right_cube[i]
+                    for i in range(last_shared_index + 1, right_cube.shape[0])]
     return np.array(shared + unique_left + unique_right)
 
 
-def apply_homography(
-    source_cube: np.ndarray, homography_matrix: np.ndarray, target_shape: tuple
-) -> np.ndarray:
+def apply_homography(source_cube, homography_matrix, target_shape):
     """Warp every band in source_cube into the target frame."""
     return np.array([
         cv2.warpPerspective(
-            source_cube[i], homography_matrix, (target_shape[1], target_shape[0])
+            source_cube[i], homography_matrix,
+            (target_shape[1], target_shape[0])
         )
         for i in range(source_cube.shape[0])
     ])
 
 
-def compute_homography(
-    source: np.ndarray, destination: np.ndarray, prestretch: int = 1
-) -> np.ndarray:
+def compute_homography(source, destination, prestretch=1):
     """Compute a homography matrix via SIFT feature matching."""
     sift = cv2.SIFT_create()
-    src_kp, src_desc = sift.detectAndCompute(eightbit(source, prestretch), None)
+    src_kp, src_desc = sift.detectAndCompute(eightbit(source,      prestretch), None)
     dst_kp, dst_desc = sift.detectAndCompute(eightbit(destination, prestretch), None)
 
     matcher = cv2.BFMatcher(cv2.NORM_L2, crossCheck=True)
@@ -319,22 +346,18 @@ def compute_homography(
     return homography
 
 
-def create_bad_pixel_mask(pixmaps: Dict[str, np.ndarray], camera: str, shape=None) -> np.ndarray:
+def create_bad_pixel_mask(pixmaps, camera, shape=None):
     """Union of bad-pixel masks across all bands for a given camera."""
-    masks = [
-        np.isin(v, BAD_PIXEL_VALUES) for k, v in pixmaps.items() if k.startswith(camera)
-    ]
+    masks = [np.isin(v, BAD_PIXEL_VALUES) for k, v in pixmaps.items()
+             if k.startswith(camera)]
     if not masks:
-        # No pixmaps for this camera — return an all-clear mask of the correct shape.
         return np.zeros(shape or (1, 1), dtype=bool)
     return np.any(np.dstack(masks), axis=2)
 
 
-def apply_pixel_masks(
-    bands: Dict[str, np.ndarray], pixmaps: Dict[str, np.ndarray]
-) -> Dict[str, np.ndarray]:
+def apply_pixel_masks(bands, pixmaps):
     """Replace bad pixels with NaN using per-camera pixmap masks."""
-    shape = next(iter(bands.values())).shape
+    shape      = next(iter(bands.values())).shape
     left_mask  = create_bad_pixel_mask(pixmaps, "L", shape)
     right_mask = create_bad_pixel_mask(pixmaps, "R", shape)
     return {
@@ -343,9 +366,8 @@ def apply_pixel_masks(
     }
 
 
-def create_rgb_stretch(cube: np.ndarray) -> np.ndarray:
+def create_rgb_stretch(cube):
     from marslab.imgops.imgutils import enhance_color
     rgb    = np.stack([cube[2], cube[1], cube[0]], axis=-1)
     result = enhance_color(np.ma.masked_invalid(rgb), bounds=(0, 1), stretch=0.1)
-    filled = np.ma.filled(result, 0)
-    return np.ascontiguousarray(filled * 255, dtype=np.uint8)
+    return np.ascontiguousarray(np.ma.filled(result, 0) * 255, dtype=np.uint8)
