@@ -337,3 +337,85 @@ def _assemble(blocks: Sequence[_Block]) -> bytes:
         cursor  += _BLOCK_HEADER_SIZE
 
     return bytes(out)
+
+def read_sel(
+    sel_path: str,
+    instrument: Optional[str] = None,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Read ROI bounding boxes from a .sel file.
+
+    Parses the LSELTEMP and RSELTEMP mask blocks and converts each unique
+    label back to an (x, y, w, h) bounding box in full-sensor coordinates.
+    Labels are read in ascending order so ROI indices are stable.
+
+    Args:
+        sel_path:   Path to the .sel file.
+        instrument: "ZCAM"/"MCZ" or "PCAM"/"PANCAM". Inferred from defaults if None.
+
+    Returns:
+        Tuple of (right_rois, left_rois), each (N, 4) int32 arrays of (x, y, w, h).
+        Both arrays have the same length - unmatched slots are zeroed.
+    """
+    inst_key   = _normalize_instrument(instrument)
+    background = _MASK_DEFAULTS[inst_key]["background"]
+    blocks     = _read_template(Path(sel_path))
+
+    right_rois = _rois_from_block(blocks[_RSEL_IDX].decompressed, background)
+    left_rois  = _rois_from_block(blocks[_LSEL_IDX].decompressed, background)
+
+    n = max(len(right_rois), len(left_rois))
+    def _pad(rois):
+        if len(rois) == n:
+            return rois
+        pad = np.zeros((n - len(rois), 4), dtype=np.int32)
+        return np.vstack([rois, pad]) if len(rois) else pad
+
+    return _pad(right_rois), _pad(left_rois)
+
+
+def _parse_mask_header(payload: bytes) -> Tuple[int, int, int]:
+    """Extract (W, H, header_size) from a decompressed LSELTEMP/RSELTEMP payload."""
+    _UINT  = 4
+    _FIELD = _UINT  # every header field is one uint32
+
+    name_len  = struct.unpack(">I", payload[:_UINT])[0]
+    pre_dims  = _UINT + name_len + 7 * _FIELD  # name_len + type + 2 unknowns + n_dims + n + n + n_dim_fields
+    post_dims = _FIELD + 2 * _UINT             # padding(8) + unknown
+
+    base     = pre_dims + post_dims
+    W        = struct.unpack(">I", payload[base:         base + _UINT])[0]
+    H        = struct.unpack(">I", payload[base + _UINT: base + 2 * _UINT])[0]
+    hdr_size = base + 2 * _UINT + 8 * _FIELD   # W + H + 6 static fields + 2 trailing constants
+
+    return W, H, hdr_size
+
+
+def _rois_from_block(payload: bytes, background: int) -> np.ndarray:
+    """Convert a decompressed mask payload into (N, 4) bounding boxes."""
+    if not payload:
+        return np.empty((0, 4), dtype=np.int32)
+
+    try:
+        W, H, hdr_size = _parse_mask_header(payload)
+    except Exception:
+        return np.empty((0, 4), dtype=np.int32)
+
+    mask   = np.frombuffer(payload[hdr_size:hdr_size + H * W], dtype=np.uint8).reshape(H, W)
+    labels = sorted(v for v in np.unique(mask) if v != background)
+    if not labels:
+        return np.empty((0, 4), dtype=np.int32)
+
+    rois = []
+    for label in labels:
+        ys, xs = np.where(mask == label)
+        if ys.size == 0:
+            continue
+        x0, x1         = int(xs.min()), int(xs.max())
+        y0_flipped      = int(ys.min())
+        y1_flipped      = int(ys.max())
+        # undo the vertical flip from _build_mask
+        y0 = H - y1_flipped - 1
+        y1 = H - y0_flipped - 1
+        rois.append((x0, y0, x1 - x0 + 1, y1 - y0 + 1))
+
+    return np.array(rois, dtype=np.int32) if rois else np.empty((0, 4), dtype=np.int32)
