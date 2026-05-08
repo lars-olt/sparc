@@ -3,9 +3,10 @@
 import numpy as np
 import cv2
 import pandas as pd
+from functools import reduce
+from operator import mul
 from pathlib import Path
 from typing import TypedDict, Optional, Dict
-from rapid.helpers import get_zcam_bandset
 from marslab.imgops.imgutils import crop, eightbit
 import asdf_settings.metadata
 from asdf_settings import rapidlooks
@@ -41,40 +42,58 @@ BAD_PIXEL_VALUES = tuple(
 ZCAM_CROP = rapidlooks.CROP_SETTINGS["crop"]
 
 
-def _make_zcam_bandset_fallback(iof_path, seq_id=None):
-    """
-    Build a ZcamBandSet bypassing rapid's cluster_observations.
-    On Windows, asdf computes the stem column from the directory path rather
-    than the file stem, so all files in a scene share one stem and compete as
-    siblings. rate_cal_offset keeps only the single best-scoring file, dropping
-    everything else. This fallback deduplicates per filter directly - one file
-    per filter, chosen by the same cal_offset score - and hands the result
-    straight to ZcamBandSet.
-    """
-    from asdf.scan import scan_zcam_files, rate_cal_offset
-    from asdf.zcam_bandset import ZcamBandSet
-    from functools import reduce
-    from operator import mul
+def _fwd(path) -> str:
+    """Forward-slash path string to avoid asdf stem-parsing bugs on Windows."""
+    return str(path).replace('\\', '/')
 
-    all_obs = scan_zcam_files(Path(iof_path))
+
+def _scan_and_split(iof_path, seq_id=None):
+    """
+    Scan a folder and split files into per-pointing groups using RSM.
+
+    Each pointing consists of a left/right camera pair with consecutive RSM
+    values (e.g. 460/462). Sorting unique RSMs and chunking into pairs of two
+    correctly groups all pointings regardless of scene count.
+
+    Returns a list of DataFrames, one per pointing, each containing all filters
+    for that pointing.
+    """
+    from asdf.scan import scan_zcam_files
+
+    all_obs = scan_zcam_files(_fwd(iof_path))
     if seq_id:
         all_obs = all_obs[
             all_obs['SEQ_ID'].str.lower().str.contains(str(seq_id).lower())
         ]
 
-    # drop off-size subframes (focus/context frames) - keep only the
-    # drop off-size subframes (focus/context frames) - keep only files
-    # with the largest frame size
+    # Drop focus/context subframes — keep only the largest frame size.
     frame_areas = all_obs['SUBFRAME'].map(lambda s: reduce(mul, s[2:]))
     all_obs     = all_obs[frame_areas == frame_areas.max()]
 
+    rsm_vals = sorted(all_obs['RSM'].unique())
+    groups   = []
+    for i in range(0, len(rsm_vals), 2):
+        pair  = rsm_vals[i:i + 2]
+        group = all_obs[all_obs['RSM'].isin(pair)].copy().reset_index(drop=True)
+        if len(group) >= 3:
+            groups.append(group)
+
+    return groups
+
+
+def _bandset_from_group(group):
+    """Build and format a ZcamBandSet from a pre-filtered metadata DataFrame."""
+    from asdf.scan import rate_cal_offset
+    from asdf.zcam_bandset import ZcamBandSet
+
+    # Deduplicate: one file per filter, best cal_offset score wins.
     keep_rows = []
-    for _filt, group in all_obs.groupby('FILTER'):
-        if len(group) == 1:
-            keep_rows.append(group.iloc[0])
+    for _filt, fgroup in group.groupby('FILTER'):
+        if len(fgroup) == 1:
+            keep_rows.append(fgroup.iloc[0])
         else:
-            scores = rate_cal_offset(group)
-            keep_rows.append(group.loc[scores[scores].index[0]])
+            scores = rate_cal_offset(fgroup)
+            keep_rows.append(fgroup.loc[scores[scores].index[0]])
 
     deduped = pd.DataFrame(keep_rows).reset_index(drop=True)
     bs = ZcamBandSet(deduped)
@@ -106,15 +125,13 @@ def load_cube(
 def _load_zcam_cube(
     iof_path, seq_id, obs_ix, do_apply_pixmaps, ignore_bayers, rgb_bands
 ):
-    search_path = Path(iof_path)
-    bandset     = get_zcam_bandset(
-        search_path, seq_id=seq_id, observation_ix=obs_ix, load=False
-    )
+    groups = _scan_and_split(iof_path, seq_id)
+    if obs_ix >= len(groups):
+        raise ValueError(
+            f"obs_ix={obs_ix} out of range — found {len(groups)} pointing(s) in {iof_path}"
+        )
 
-    # fewer than 3 bands means rapid's clustering rejected most files -
-    # fall back to building the bandset directly
-    if len(bandset.metadata) < 3:
-        bandset = _make_zcam_bandset_fallback(search_path, seq_id)
+    bandset = _bandset_from_group(groups[obs_ix])
 
     scene_id = bandset.name
     filters  = bandset.metadata["BAND"].sort_values()
