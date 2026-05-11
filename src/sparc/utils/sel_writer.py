@@ -44,7 +44,7 @@ _TEMPLATE_NAMES = {
     "pcam": "blank_pcam.sel",
 }
 
-# merspect label conventions differ between instruments.
+# MERSpect label conventions differ between instruments.
 # MCZ: background=0, first ROI=4.
 # Pancam: background=15, first ROI=0.
 _MASK_DEFAULTS = {
@@ -70,6 +70,7 @@ def export_sel(
     instrument: Optional[str] = None,
     first_region_id: Optional[int] = None,
     background_value: Optional[int] = None,
+    label_ids: Optional[List[int]] = None,
 ) -> None:
     """Write a merspect-compatible .sel file by patching a blank template.
 
@@ -84,7 +85,11 @@ def export_sel(
                           template for 'instrument' is used.
         instrument:       "ZCAM"/"MCZ" or "PCAM"/"PANCAM".
         first_region_id:  Override the first ROI label (instrument default if None).
+                          Ignored when label_ids is provided.
         background_value: Override the background label (instrument default if None).
+        label_ids:        Explicit per-ROI MERSpect label indices. When provided,
+                          first_region_id is ignored and each ROI is painted with
+                          its corresponding label_ids value.
     """
     inst_key         = _normalize_instrument(instrument)
     defaults         = _MASK_DEFAULTS[inst_key]
@@ -103,9 +108,37 @@ def export_sel(
         return
 
     blocks = list(template)
-    blocks[_LSEL_IDX] = _Block(_make_mask("LSELTEMP", left_rois,  H, W, first_region_id, background_value), b"")
-    blocks[_RSEL_IDX] = _Block(_make_mask("RSELTEMP", right_rois, H, W, first_region_id, background_value), b"")
+    blocks[_LSEL_IDX] = _Block(_make_mask("LSELTEMP", left_rois,  H, W, first_region_id, background_value, label_ids), b"")
+    blocks[_RSEL_IDX] = _Block(_make_mask("RSELTEMP", right_rois, H, W, first_region_id, background_value, label_ids), b"")
     Path(output_path).write_bytes(_assemble(blocks))
+
+
+def read_sel(
+    sel_path: str,
+    instrument: Optional[str] = None,
+) -> Tuple[np.ndarray, np.ndarray, List[int]]:
+    """Read ROI bounding boxes and their MERSpect label indices from a .sel file.
+
+    Returns:
+        Tuple of (right_rois, left_rois, label_ids) where right_rois and left_rois
+        are (N, 4) int32 arrays of (x, y, w, h) and label_ids are the MERSpect
+        label index for each ROI.
+    """
+    inst_key   = _normalize_instrument(instrument)
+    background = _MASK_DEFAULTS[inst_key]["background"]
+    blocks     = _read_template(Path(sel_path))
+
+    right_rois, label_ids = _rois_from_block(blocks[_RSEL_IDX].decompressed, background)
+    left_rois,  _         = _rois_from_block(blocks[_LSEL_IDX].decompressed, background)
+
+    n = max(len(right_rois), len(left_rois))
+    def _pad(rois):
+        if len(rois) == n:
+            return rois
+        pad = np.zeros((n - len(rois), 4), dtype=np.int32)
+        return np.vstack([rois, pad]) if len(rois) else pad
+
+    return _pad(right_rois), _pad(left_rois), label_ids
 
 
 def filenames_from_load_result(load_result: dict, n_rois: int) -> Tuple[List[str], List[str]]:
@@ -122,12 +155,10 @@ def get_default_template_path(instrument: Optional[str] = None) -> Path:
     inst_key = _normalize_instrument(instrument)
     name     = _TEMPLATE_NAMES[inst_key]
 
-    # Try importlib.resources first (works when installed as a package).
     resource = _resource_path(inst_key)
     if resource is not None:
         return resource
 
-    # Fall back to paths relative to this file.
     here       = Path(__file__).resolve().parent
     candidates = [
         here / name,
@@ -142,7 +173,7 @@ def get_default_template_path(instrument: Optional[str] = None) -> Path:
 
     raise FileNotFoundError(
         f"No blank .sel template found for {inst_key!r}. "
-        f"Expected {name!r} — pass template_path= to override."
+        f"Expected {name!r} - pass template_path= to override."
     )
 
 
@@ -223,7 +254,7 @@ def _read_template(path: Path) -> List[_Block]:
         raise ValueError(f"Unsupported .sel version {version}; expected {_VERSION}.")
 
     n_blocks    = struct.unpack(">I", raw[4:8])[0] + 1
-    payload_end = struct.unpack(">I", raw[8:12])[0]  # absolute end of block 0
+    payload_end = struct.unpack(">I", raw[8:12])[0]
     offset      = _FILE_HEADER_SIZE
     blocks: List[_Block] = []
 
@@ -273,17 +304,18 @@ def _build_mask(
     W: int,
     first_id: int,
     background: int,
+    label_ids: Optional[List[int]] = None,
 ) -> np.ndarray:
     """Paint ROIs into a uint8 label mask in IDL array order (y=0 at bottom)."""
     mask = np.full((H, W), background, dtype=np.uint8)
     for i, roi in enumerate(rois):
-        region_id = first_id + i
+        region_id = label_ids[i] if label_ids is not None else first_id + i
         if region_id > 255:
-            raise ValueError("Too many ROIs — region ID exceeds uint8 range.")
+            raise ValueError("Too many ROIs - region ID exceeds uint8 range.")
         x, y, w, h = int(roi[0]), int(roi[1]), int(roi[2]), int(roi[3])
         if w <= 0 or h <= 0:
             continue
-        # Flip vertically to match merspect origin (y=0 at top of image)
+        # Flip vertically to match merspect origin (y=0 at top of image).
         x0, x1 = max(0, x), min(W, x + w)
         y0, y1 = max(0, H - y - h), min(H, H - y)
         if x1 > x0 and y1 > y0:
@@ -291,9 +323,17 @@ def _build_mask(
     return mask
 
 
-def _make_mask(name: str, rois: np.ndarray, H: int, W: int, first_id: int, background: int) -> bytes:
+def _make_mask(
+    name: str,
+    rois: np.ndarray,
+    H: int,
+    W: int,
+    first_id: int,
+    background: int,
+    label_ids: Optional[List[int]] = None,
+) -> bytes:
     """Build a compressed LSELTEMP/RSELTEMP payload."""
-    mask = _build_mask(rois, H, W, first_id, background)
+    mask = _build_mask(rois, H, W, first_id, background, label_ids)
     n    = H * W
     hdr  = struct.pack(">I", len(name)) + name.encode("ascii")
     hdr += struct.pack(">I", 1)   # IDL type BYTE
@@ -311,6 +351,68 @@ def _make_mask(name: str, rois: np.ndarray, H: int, W: int, first_id: int, backg
     hdr += struct.pack(">I", 7)   # static IDL struct constant
     hdr += struct.pack(">I", n)
     return zlib.compress(hdr + mask.tobytes(), level=6)
+
+
+def _parse_mask_header(payload: bytes) -> Tuple[int, int, int]:
+    """Extract (W, H, header_size) from a decompressed LSELTEMP/RSELTEMP payload."""
+    if len(payload) < 8:
+        raise ValueError("Mask payload too short.")
+
+    name_len = struct.unpack(">I", payload[0:4])[0]
+    _UINT    = 4
+    _FIELD   = _UINT
+
+    pre_dims  = _UINT + name_len + 7 * _FIELD  # name + type + 2 unknowns + n_dims + n + n + n_dim_fields
+    post_dims = _FIELD + 2 * _UINT              # padding(8) + unknown
+
+    base     = pre_dims + post_dims
+    W        = struct.unpack(">I", payload[base:         base + _UINT])[0]
+    H        = struct.unpack(">I", payload[base + _UINT: base + 2 * _UINT])[0]
+    hdr_size = base + 2 * _UINT + 8 * _FIELD   # W + H + 6 static fields + 2 trailing constants
+
+    return W, H, hdr_size
+
+
+def _rois_from_block(payload: bytes, background: int) -> Tuple[np.ndarray, List[int]]:
+    """Convert a decompressed mask payload into (N, 4) bounding boxes and their label values."""
+    from scipy.ndimage import find_objects
+
+    empty = np.empty((0, 4), dtype=np.int32), []
+
+    if not payload:
+        return empty
+
+    try:
+        W, H, hdr_size = _parse_mask_header(payload)
+    except Exception:
+        return empty
+
+    mask   = np.frombuffer(payload[hdr_size:hdr_size + H * W], dtype=np.uint8).reshape(H, W)
+    labels = sorted(v for v in np.unique(mask) if v != background)
+    if not labels:
+        return empty
+
+    remapped = np.zeros_like(mask)
+    for i, label in enumerate(labels, start=1):
+        remapped[mask == label] = i
+
+    slices = find_objects(remapped)
+    rois        = []
+    label_values = []
+    for i, sl in enumerate(slices):
+        if sl is None:
+            continue
+        y0_flipped = sl[0].start
+        y1_flipped = sl[0].stop - 1
+        x0 = sl[1].start
+        y0 = H - y1_flipped - 1
+        y1 = H - y0_flipped - 1
+        rois.append((x0, y0, sl[1].stop - x0, y1 - y0 + 1))
+        label_values.append(labels[i])
+
+    if not rois:
+        return empty
+    return np.array(rois, dtype=np.int32), label_values
 
 
 def _assemble(blocks: Sequence[_Block]) -> bytes:
@@ -337,85 +439,3 @@ def _assemble(blocks: Sequence[_Block]) -> bytes:
         cursor  += _BLOCK_HEADER_SIZE
 
     return bytes(out)
-
-def read_sel(
-    sel_path: str,
-    instrument: Optional[str] = None,
-) -> Tuple[np.ndarray, np.ndarray]:
-    """Read ROI bounding boxes from a .sel file.
-
-    Parses the LSELTEMP and RSELTEMP mask blocks and converts each unique
-    label back to an (x, y, w, h) bounding box in full-sensor coordinates.
-    Labels are read in ascending order so ROI indices are stable.
-
-    Args:
-        sel_path:   Path to the .sel file.
-        instrument: "ZCAM"/"MCZ" or "PCAM"/"PANCAM". Inferred from defaults if None.
-
-    Returns:
-        Tuple of (right_rois, left_rois), each (N, 4) int32 arrays of (x, y, w, h).
-        Both arrays have the same length - unmatched slots are zeroed.
-    """
-    inst_key   = _normalize_instrument(instrument)
-    background = _MASK_DEFAULTS[inst_key]["background"]
-    blocks     = _read_template(Path(sel_path))
-
-    right_rois = _rois_from_block(blocks[_RSEL_IDX].decompressed, background)
-    left_rois  = _rois_from_block(blocks[_LSEL_IDX].decompressed, background)
-
-    n = max(len(right_rois), len(left_rois))
-    def _pad(rois):
-        if len(rois) == n:
-            return rois
-        pad = np.zeros((n - len(rois), 4), dtype=np.int32)
-        return np.vstack([rois, pad]) if len(rois) else pad
-
-    return _pad(right_rois), _pad(left_rois)
-
-
-def _parse_mask_header(payload: bytes) -> Tuple[int, int, int]:
-    """Extract (W, H, header_size) from a decompressed LSELTEMP/RSELTEMP payload."""
-    _UINT  = 4
-    _FIELD = _UINT  # every header field is one uint32
-
-    name_len  = struct.unpack(">I", payload[:_UINT])[0]
-    pre_dims  = _UINT + name_len + 7 * _FIELD  # name_len + type + 2 unknowns + n_dims + n + n + n_dim_fields
-    post_dims = _FIELD + 2 * _UINT             # padding(8) + unknown
-
-    base     = pre_dims + post_dims
-    W        = struct.unpack(">I", payload[base:         base + _UINT])[0]
-    H        = struct.unpack(">I", payload[base + _UINT: base + 2 * _UINT])[0]
-    hdr_size = base + 2 * _UINT + 8 * _FIELD   # W + H + 6 static fields + 2 trailing constants
-
-    return W, H, hdr_size
-
-
-def _rois_from_block(payload: bytes, background: int) -> np.ndarray:
-    """Convert a decompressed mask payload into (N, 4) bounding boxes."""
-    if not payload:
-        return np.empty((0, 4), dtype=np.int32)
-
-    try:
-        W, H, hdr_size = _parse_mask_header(payload)
-    except Exception:
-        return np.empty((0, 4), dtype=np.int32)
-
-    mask   = np.frombuffer(payload[hdr_size:hdr_size + H * W], dtype=np.uint8).reshape(H, W)
-    labels = sorted(v for v in np.unique(mask) if v != background)
-    if not labels:
-        return np.empty((0, 4), dtype=np.int32)
-
-    rois = []
-    for label in labels:
-        ys, xs = np.where(mask == label)
-        if ys.size == 0:
-            continue
-        x0, x1         = int(xs.min()), int(xs.max())
-        y0_flipped      = int(ys.min())
-        y1_flipped      = int(ys.max())
-        # undo the vertical flip from _build_mask
-        y0 = H - y1_flipped - 1
-        y1 = H - y0_flipped - 1
-        rois.append((x0, y0, x1 - x0 + 1, y1 - y0 + 1))
-
-    return np.array(rois, dtype=np.int32) if rois else np.empty((0, 4), dtype=np.int32)
