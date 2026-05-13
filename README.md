@@ -11,56 +11,43 @@ SPARC separates state management from pure data transformations:
 * State ([state.py](src/sparc/core/state.py)): Dataclass tracking the pipeline lifecycle
 * Backends ([backends.py](src/sparc/core/backends.py)): Abstraction layer for quickly swapping segmentation and clustering implementations
 
-## Installation & Setup
+## Installation
 
-This project requires manual setup of several dependencies.
+### 1. Clone and install
 
-### 1. PyTorch & CUDA
-
-You must manually install a version of PyTorch that matches your local CUDA version (e.g., CUDA 12.4). The requirements file does not handle this.
-
-# Example for CUDA 12.4
-```console
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+```bash
+git clone https://github.com/lars-olt/sparc.git
+cd sparc
+uv venv
+uv sync
 ```
 
-### 2. External Repositories
+### 2. GPU acceleration (optional)
 
-The pipeline relies on several private or external libraries that must be manually cloned and installed:
+SPARC runs in CPU mode by default. For faster segmentation, install PyTorch with CUDA support on top of the uv environment. Find the right command for your system and CUDA version at [pytorch.org/get-started/locally](https://pytorch.org/get-started/locally/), then run it with `--force-reinstall`:
 
-* asdf: https://github.com/MillionConcepts/asdf.git
-* pdr: https://github.com/MillionConcepts/pdr.git
-* silencio: https://github.com/MillionConcepts/silencio.git
-* prettyplot: https://github.com/MillionConcepts/pretty-plot.git
-
-### 3. Standard Dependencies
-
-Install the remaining standard Python packages (NumPy, OpenCV, Segment Anything, etc.) via the requirements file:
-
-```console
-pip install -r requirements.txt
+```bash
+# example for CUDA 12.1 - replace cu121 with your version
+uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121 --force-reinstall
 ```
 
-### 4. SAM Model Weights
+### 3. SAM model checkpoint
 
-Ensure you have the Segment Anything Model (SAM) weights.
-
-* Download: ViT-H SAM model (https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth)
-* Placement: doesn't matter - you will pass it's location as a string when initializing sparc
+Download `sam_vit_h_4b8939.pth` from the [Segment Anything repository](https://github.com/facebookresearch/segment-anything) and note its path — you will pass it to SPARC at runtime via `sam_model_path`.
 
 ## Quick Start
 
-The primary entry point is the Sparc class.
+The primary entry point is the `Sparc` class.
 
 ```python
-from src.sparc import Sparc, export_spectra_csv
+from sparc import Sparc
 
 # Initialize
 sparc = Sparc(
     sam_model_path="./models/sam_vit_h_4b8939.pth",
     use_gpu=True,
     use_threading=True,
-    verbose=True  # Shows shapes, timings, and spectral stats
+    verbose=True
 )
 
 # Run pipeline
@@ -85,14 +72,36 @@ result = sparc.result
 print(f"Found {len(result.final_rois)} ROIs in {result.n_clusters} spectral clusters")
 
 # Export
-export_spectra_csv(result, "output/spectra.csv")
+from sparc.core.result import export_sel
+export_sel(result, "output/scene.sel")
+```
+
+SPARC also supports Pancam data - pass `instrument="PCAM"` to `.load()`.
+
+### Functional API
+
+For scripting or batch use, a functional entry point is also available:
+
+```python
+from sparc.core.functional import run_sparc
+from sparc.core.config import SparcConfig, LoadConfig, SegmentConfig
+
+config = SparcConfig(
+    load    = LoadConfig(iof_path="/path/to/data", instrument="ZCAM"),
+    segment = SegmentConfig(sam_model_path="./models/sam_vit_h_4b8939.pth"),
+)
+result = run_sparc(config=config)
 ```
 
 ### Configuration
-Configuration is handled via strongly-typed dataclasses in config.py. You can adjust these dynamically via the method arguments shown above, or by modifying the config object directly before running steps.
 
-Tuning params in [`config.py`](src/sparc/core/config.py):
-* `albedo_ratio_threshold` (default: 0.80): filters pixels with large descrepancy between the left and right cameras.
-* `allowed_variance`: threshold for splitting a SAM segment into multiple spectral clusters.
-* `edge_offset`: number of pixels to ignore around the image border.
-* `max_subclusters`: Absolute limit on sub-clusters per segment to prevent fragmentation.
+Configuration is handled via strongly-typed dataclasses in [`config.py`](src/sparc/core/config.py). Parameters can be set via method arguments as shown above, or by modifying the config object directly before running individual steps.
+
+Key tuning parameters:
+
+- `albedo_ratio_threshold` (default: `0.80`) - filters ROIs with a large brightness discrepancy between left and right cameras. ZCAM only.
+- `allowed_variance` (default: `1.0`) - threshold for splitting a SAM segment into multiple spectral subclusters. Lower values produce finer splits.
+- `edge_offset` (default: `10`) - pixels ignored around the image border to avoid edge artifacts.
+- `max_subclusters` (default: `10`) - hard limit on subclusters per segment to prevent fragmentation.
+- `contamination` (default: `0.1`) - expected fraction of outlier spectra passed to the anomaly detector.
+- `max_components` (default: `9`) - maximum number of spectral clusters the Bayesian GMM may find.
