@@ -44,7 +44,8 @@ ZCAM_CROP = rapidlooks.CROP_SETTINGS["crop"]
 
 def _fwd(path) -> str:
     """Forward-slash path string to avoid asdf stem-parsing bugs on Windows."""
-    return str(path).replace('\\', '/')
+    import os
+    return os.path.normpath(os.path.expanduser(str(path))).replace('\\', '/')
 
 
 def _scan_and_split(iof_path, seq_id=None):
