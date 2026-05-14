@@ -43,7 +43,12 @@ ZCAM_CROP = rapidlooks.CROP_SETTINGS["crop"]
 
 
 def _fwd(path) -> str:
-    """Forward-slash path string to avoid asdf stem-parsing bugs on Windows."""
+    """Normalize and forward-slash a path string.
+
+    os.path.normpath resolves virtual filesystem paths (e.g. Dropbox on macOS)
+    that QFileDialog returns but low-level file scanners can't traverse directly.
+    The replace converts backslashes for asdf's Windows stem-parsing.
+    """
     import os
     return os.path.normpath(os.path.expanduser(str(path))).replace('\\', '/')
 
