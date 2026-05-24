@@ -34,7 +34,10 @@ def parse_pcam_fn(filepath):
     if match is None:
         return None
     d = match.groupdict()
-    d['PATH'] = os.path.normpath(os.path.expanduser(str(filepath))).replace('\\', '/')
+    p = Path(os.path.normpath(os.path.expanduser(str(filepath))))
+    # Uppercase the extension - pdr resolves ^IMAGE pointers case-sensitively
+    # and expects .IMG/.IMQ, not .img/.imq
+    d['PATH'] = str(p.with_suffix(p.suffix.upper())).replace('\\', '/')
     d['SCLK'] = int(d['SCLK'])
     return d
 

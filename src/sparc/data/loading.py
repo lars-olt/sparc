@@ -254,12 +254,14 @@ def _load_pcam_cube(iof_path, seq_id, obs_ix, rgb_bands):
     first_label = None
     for _, row in bandset.metadata.iterrows():
         band  = row["BAND"]
-        label = pdr.Data(row["PATH"]).metadata
+        fpath = row["PATH"]
+        data  = pdr.Data(fpath)
+        label = data.metadata
         if first_label is None:
             first_label = label
         scale  = label["DERIVED_IMAGE_PARMS"]["RADIANCE_SCALING_FACTOR"]
         offset = label["DERIVED_IMAGE_PARMS"]["RADIANCE_OFFSET"]
-        dn = bandset.get_band(band).copy().astype(np.float32)
+        dn = data['IMAGE'].copy().astype(np.float32)
         dn = np.where((dn == 0) | (dn == 4095), np.nan, dn)
         bands[band] = dn * scale + offset
 
