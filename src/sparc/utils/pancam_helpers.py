@@ -1,5 +1,6 @@
 """Pancam data scanning and bandset construction."""
 
+import os
 import re
 from functools import cache, partial
 from pathlib import Path
@@ -33,7 +34,7 @@ def parse_pcam_fn(filepath):
     if match is None:
         return None
     d = match.groupdict()
-    d['PATH'] = str(filepath)
+    d['PATH'] = os.path.normpath(os.path.expanduser(str(filepath))).replace('\\', '/')
     d['SCLK'] = int(d['SCLK'])
     return d
 
@@ -66,7 +67,8 @@ def scan_pcam_files(root_dir, seq_id=None):
     if df.empty:
         raise ValueError(f"No IOF products matched in {root_dir}")
 
-    df['BAND'] = df['FILTER'].str.upper()
+    df['FILTER'] = df['FILTER'].str.upper()
+    df['BAND']   = df['FILTER']
     return df
 
 
