@@ -243,7 +243,6 @@ def _load_pcam_cube(iof_path, seq_id, obs_ix, rgb_bands):
     from ..utils.pancam_helpers import get_pcam_bandset
 
     bandset  = get_pcam_bandset(Path(iof_path), seq_id=seq_id, observation_ix=obs_ix, load=True)
-    scene_id = bandset.name
 
     STEREO_PAIRS  = [("L2", "R2"), ("L7", "R1")]
     stereo_left   = {l for l, r in STEREO_PAIRS}
@@ -305,6 +304,15 @@ def _load_pcam_cube(iof_path, seq_id, obs_ix, rgb_bands):
         merged_band_recipe.append(('right_only', b, None, b))
 
     bandset._sparc_wavelengths = merged_wavelengths
+    bandset._sparc_label       = first_label
+
+    # build a meaningful scene id from the PDS label
+    try:
+        sol      = int(first_label['PLANET_DAY_NUMBER'])
+        seq      = str(first_label['SEQUENCE_ID']).strip()
+        scene_id = f"Sol{sol:04d}_{seq}"
+    except Exception:
+        scene_id = bandset.metadata['SEQ_ID'].iloc[0] if 'SEQ_ID' in bandset.metadata.columns else "PCAM_scene"
 
     left_rgb_img  = _pcam_rgb(bands["L2"], bands["L5"], bands["L6"])
     right_rgb_img = _pcam_rgb(bands["R2"], bands["R1"], bands["R1"])
