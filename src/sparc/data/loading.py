@@ -314,8 +314,8 @@ def _load_pcam_cube(iof_path, seq_id, obs_ix, rgb_bands):
     except Exception:
         scene_id = bandset.metadata['SEQ_ID'].iloc[0] if 'SEQ_ID' in bandset.metadata.columns else "PCAM_scene"
 
-    left_rgb_img  = _pcam_rgb(bands["L2"], bands["L5"], bands["L6"])
-    right_rgb_img = _pcam_rgb(bands["R2"], bands["R1"], bands["R1"])
+    left_rgb_img  = _pcam_rgb(bands["L4"], bands["L5"], bands["L6"])
+    right_rgb_img = _pcam_rgb(bands["R7"], bands["R5"], bands["R3"])
 
     return {
         "cube":               np.array(merged_arrays),
