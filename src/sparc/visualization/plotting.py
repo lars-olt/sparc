@@ -86,7 +86,7 @@ def plot_spectra_with_error(spectra: np.ndarray,
         )
 
     ax.set_xlabel("Wavelength (nm)")
-    ax.set_ylabel("R* = IOF/cos(θ)")
+    ax.set_ylabel("IOF")
     ax.grid(True, alpha=0.3)
 
     if show:
