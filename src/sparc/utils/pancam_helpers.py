@@ -75,17 +75,60 @@ def scan_pcam_files(root_dir, seq_id=None):
     return df
 
 
+def split_pcam_observations(products: pd.DataFrame) -> list:
+    """
+    Split a SCLK-sorted Pancam DataFrame into per-pointing sub-observations.
+
+    Within a single SEQ_ID, a mosaic acquires the full filter set multiple times.
+    Each time a filter name repeats, a new pointing started. Splitting on that
+    boundary mirrors how ZCAM uses consecutive RSM pairs to separate pointings.
+
+    Returns a list of DataFrames, one per pointing, each containing one full
+    filter set sorted by SCLK.
+    """
+    groups     = []
+    current    = []
+    seen       = set()
+
+    for _, row in products.sort_values('SCLK').iterrows():
+        filt = row['FILTER']
+        if filt in seen:
+            if current:
+                groups.append(pd.DataFrame(current).reset_index(drop=True))
+            current = [row]
+            seen    = {filt}
+        else:
+            current.append(row)
+            seen.add(filt)
+
+    if current:
+        groups.append(pd.DataFrame(current).reset_index(drop=True))
+
+    return groups
+
+
 def get_pcam_bandset(image_path, roi_path=None, seq_id=None, observation_ix=0, load=True):
     """
     Build a PcamBandSet for the specified observation.
 
-    Mirrors the get_zcam_bandset API from rapid.helpers.
+    observation_ix indexes across all per-pointing sub-observations found in
+    image_path, properly splitting mosaic sequences that share a SEQ_ID.
     """
-    products    = scan_pcam_files(image_path, seq_id=seq_id)
-    clusters    = {k: v for k, v in products.groupby('SEQ_ID')}
-    observation = list(clusters.values())[observation_ix]
+    products = scan_pcam_files(image_path, seq_id=seq_id)
 
-    bandset = PcamBandSet(observation)
+    # split every SEQ_ID group into its per-pointing sub-observations
+    observations = []
+    for _, group in products.groupby('SEQ_ID'):
+        observations.extend(split_pcam_observations(group))
+
+    if observation_ix >= len(observations):
+        raise ValueError(
+            f"observation_ix={observation_ix} out of range - "
+            f"found {len(observations)} pointing(s) in {image_path}"
+        )
+
+    observation = observations[observation_ix]
+    bandset     = PcamBandSet(observation)
 
     if load:
         bandset.load("all")

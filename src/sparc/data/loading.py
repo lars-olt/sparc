@@ -308,14 +308,16 @@ def _load_pcam_cube(iof_path, seq_id, obs_ix, rgb_bands):
 
     # build a meaningful scene id from the PDS label
     try:
-        sol      = int(first_label['PLANET_DAY_NUMBER'])
-        seq      = str(first_label['SEQUENCE_ID']).strip()
-        scene_id = f"Sol{sol:04d}_{seq}"
+        sol  = int(first_label['PLANET_DAY_NUMBER'])
+        seq  = str(first_label['SEQUENCE_ID']).strip()
+        rmc  = first_label['ROVER_MOTION_COUNTER']
+        pma  = int(rmc[3])  # PMA is index 3: (SITE, DRIVE, IDD, PMA, HGA)
+        scene_id = f"Sol{sol:04d}_{seq}_PMA{pma}"
     except Exception:
         scene_id = bandset.metadata['SEQ_ID'].iloc[0] if 'SEQ_ID' in bandset.metadata.columns else "PCAM_scene"
 
     left_rgb_img  = _pcam_rgb(bands["L4"], bands["L5"], bands["L6"])
-    right_rgb_img = _pcam_rgb(bands["R7"], bands["R5"], bands["R3"])
+    right_rgb_img = left_rgb_img
 
     return {
         "cube":               np.array(merged_arrays),
