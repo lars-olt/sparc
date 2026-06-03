@@ -238,6 +238,65 @@ def _pcam_rgb(r_b, g_b, b_b):
     return (np.stack(channels, axis=-1) * 255).astype(np.uint8)
 
 
+def _dcs_rgb(r_b, g_b, b_b):
+    """Decorrelation stretch of three bands to uint8 RGB.
+
+    Applies eigenspace rotation to remove inter-band correlation, giving
+    enhanced spectral contrast for SAM segmentation and SIFT feature matching.
+    Works with any three float band arrays (ZCAM or Pancam).
+    """
+    H, W    = r_b.shape
+    invalid = ~np.isfinite(r_b) | ~np.isfinite(g_b) | ~np.isfinite(b_b)
+    r = np.where(invalid, 0.0, np.nan_to_num(r_b)).astype(np.float32)
+    g = np.where(invalid, 0.0, np.nan_to_num(g_b)).astype(np.float32)
+    b = np.where(invalid, 0.0, np.nan_to_num(b_b)).astype(np.float32)
+
+    vecs  = np.stack([r, g, b], axis=-1).reshape(-1, 3)
+    valid = vecs[~invalid.ravel()]
+    if valid.shape[0] < 4:
+        return np.zeros((H, W, 3), dtype=np.uint8)
+
+    cov        = np.cov(valid.T).astype(np.float32)
+    eigvals, V = np.linalg.eig(cov)
+    T          = (V @ np.diag(1.0 / np.sqrt(np.abs(eigvals))) @ V.T).astype(np.float32)
+    means      = valid.mean(axis=0)
+    dcs        = ((vecs - means) @ T + means + (means - means @ T)).reshape(H, W, 3)
+
+    result   = np.zeros((H, W, 3), dtype=np.float32)
+    valid_2d = ~invalid
+    for c in range(3):
+        ch     = dcs[:, :, c]
+        v      = ch[valid_2d]
+        if v.size == 0:
+            continue
+        lo, hi = np.percentile(v, [0.5, 99.5])
+        result[:, :, c] = np.clip((ch - lo) / (hi - lo) if hi > lo else ch, 0.0, 1.0)
+    result[invalid] = 0.0
+    return (result * 255).astype(np.uint8)
+
+
+def make_dcs_rgb(load_result: dict) -> np.ndarray:
+    """Compute a DCS-stretched RGB from base_bands for use as segmentation input.
+
+    ZCAM uses the right-camera DCS preset bands (R6/R3/R1).
+    PCAM uses the left-camera visible bands (L4/L5/L6).
+    Falls back to the existing rgb_img if any band is missing.
+    """
+    instrument = load_result.get('instrument', 'ZCAM')
+    bands      = load_result['base_bands']
+
+    if instrument == 'PCAM':
+        keys = ('L4', 'L5', 'L6')
+    else:
+        keys = ('R6', 'R3', 'R1')
+
+    r, g, b = (bands.get(k) for k in keys)
+    if any(x is None for x in (r, g, b)):
+        return load_result['rgb_img']
+
+    return _dcs_rgb(r, g, b)
+
+
 def _load_pcam_cube(iof_path, seq_id, obs_ix, rgb_bands):
     import pdr
     from ..utils.pancam_helpers import get_pcam_bandset
@@ -274,10 +333,15 @@ def _load_pcam_cube(iof_path, seq_id, obs_ix, rgb_bands):
     left_safe  = np.where(np.isfinite(left_cube),  left_cube,  0.0)
     right_safe = np.where(np.isfinite(right_cube), right_cube, 0.0)
 
-    homography_matrix = compute_homography(
-        np.where(np.isfinite(bands["L7"]), bands["L7"], 0.0),
-        np.where(np.isfinite(bands["R1"]), bands["R1"], 0.0),
-    )
+    # DCS grayscale gives better SIFT features than raw single bands.
+    left_gray  = cv2.cvtColor(
+        _dcs_rgb(bands["L4"], bands["L5"], bands["L6"]), cv2.COLOR_RGB2GRAY
+    ).astype(np.float32)
+    right_gray = cv2.cvtColor(
+        _dcs_rgb(bands["R3"], bands["R5"], bands["R7"]), cv2.COLOR_RGB2GRAY
+    ).astype(np.float32)
+
+    homography_matrix = compute_homography(left_gray, right_gray)
     left_cube_aligned = apply_homography(left_safe, homography_matrix, right_cube[0].shape)
     homography_mask   = left_cube_aligned[left_band_keys.index("L7")] == 0
     aligned           = {b: left_cube_aligned[i] for i, b in enumerate(left_band_keys)}
@@ -304,7 +368,6 @@ def _load_pcam_cube(iof_path, seq_id, obs_ix, rgb_bands):
         merged_band_recipe.append(('right_only', b, None, b))
 
     bandset._sparc_wavelengths = merged_wavelengths
-    bandset._sparc_label       = first_label
 
     # build a meaningful scene id from the PDS label
     try:
