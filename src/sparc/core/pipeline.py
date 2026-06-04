@@ -239,6 +239,10 @@ def spectral_step(state: SparcState, config: SparcConfig) -> SparcState:
         logger.debug("Too few outliers - clustering full dataset")
 
     max_components = min(config.spectral.max_components, len(spectra_to_cluster))
+    # require at least 2 samples per component - BayesianGMM with covariance_type='full'
+    # needs enough samples to estimate each covariance matrix, and n_samples == n_components
+    # always produces degenerate (singleton) clusters that sklearn rejects.
+    max_components = max(1, min(max_components, len(spectra_to_cluster) // 2))
     state.clustering_result, state.all_clustering_results = cluster_with_bayesian_gmm(
         spectra_to_cluster, max_components
     )

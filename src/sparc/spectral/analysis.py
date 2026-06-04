@@ -89,11 +89,25 @@ def fit_bayesian_gmm(data: np.ndarray,
         n_components=max_components,
         covariance_type='full',
         weight_concentration_prior=1.0 / max_components,
+        reg_covar=1e-4,   # raised from 1e-6 for robustness with small sample counts
         random_state=42,
-        max_iter=200
+        max_iter=200,
     )
 
-    labels            = bgmm.fit_predict(data)
+    try:
+        labels = bgmm.fit_predict(data)
+    except ValueError:
+        # fall back to diagonal covariance which needs far fewer samples per component
+        bgmm = BayesianGaussianMixture(
+            n_components=max_components,
+            covariance_type='diag',
+            weight_concentration_prior=1.0 / max_components,
+            reg_covar=1e-4,
+            random_state=42,
+            max_iter=200,
+        )
+        labels = bgmm.fit_predict(data)
+
     active_components = np.sum(bgmm.weights_ > 0.01)
     log_likelihood    = bgmm.score(data) * len(data)
 

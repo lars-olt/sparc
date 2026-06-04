@@ -2,6 +2,8 @@
 
 from typing import Any, Dict, Optional
 
+import numpy as np
+
 from .config import SparcConfig, LoadConfig, SegmentConfig
 from .state import SparcState
 from .result import SparcResult
@@ -40,10 +42,14 @@ def run_sparc(iof_path: str,
 
 
 def run_sparc_from_load_result(load_result: Dict[str, Any],
-                               config: SparcConfig) -> SparcResult:
+                               config: SparcConfig,
+                               presegmented: Optional[np.ndarray] = None) -> SparcResult:
     """
     Run SPARC starting from an already-loaded scene, skipping load_step.
     Used by the GUI to avoid paying the IO cost twice.
+
+    If presegmented is provided (a 2D int32 segment label array), the segment_step
+    is skipped and those labels are used directly.
     """
     config.validate()
 
@@ -58,7 +64,13 @@ def run_sparc_from_load_result(load_result: Dict[str, Any],
 
     logger.info(f"Resuming SPARC from pre-loaded scene: {load_result['id']}")
     state = preprocess_step(state, config)
-    state = segment_step(state, config)
+
+    if presegmented is not None:
+        logger.info(f"Using pre-computed segments ({len(np.unique(presegmented))} unique labels)")
+        state.segments = presegmented
+    else:
+        state = segment_step(state, config)
+
     state = roi_step(state, config)
     state = spectral_step(state, config)
     state = selection_step(state, config)
