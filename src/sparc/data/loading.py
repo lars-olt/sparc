@@ -14,6 +14,13 @@ from asdf_settings import rapidlooks
 from ..core.constants import SHARED_BANDS, BAD_PIXEL_FLAGS
 
 
+_RATIO_THRESH       = 0.75  # Lowe ratio test
+_RANSAC_THRESH      = 2.5   # reprojection threshold in pixels
+_MIN_AFFINE_INLIERS = 20    # fall back to homography below this count
+
+_CLAHE = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+
+
 class LoadResult(TypedDict):
     cube:               np.ndarray
     left_cube:          np.ndarray
@@ -428,20 +435,58 @@ def apply_homography(source_cube, homography_matrix, target_shape):
     ])
 
 
+def _prepare(img):
+    """Convert to uint8 grayscale and apply CLAHE to normalize cross-camera tone."""
+    gray = eightbit(img)
+    if gray.ndim == 3:
+        gray = cv2.cvtColor(gray, cv2.COLOR_RGB2GRAY)
+    return _CLAHE.apply(gray)
+
+
 def compute_homography(source, destination, prestretch=1):
-    """Compute a homography matrix via SIFT feature matching."""
+    """Compute a (3, 3) warp matrix from source to destination via SIFT feature matching.
+
+    Both images are converted to CLAHE-normalized grayscale before descriptor
+    extraction, removing tonal differences between cameras that would otherwise
+    corrupt matches. Tries an affine model first (more constrained, better for
+    wide-baseline stereo), falling back to a full homography if the affine inlier
+    count is too low. Always returns a (3, 3) matrix so cv2.invert and
+    warpPerspective work unchanged.
+    """
     sift = cv2.SIFT_create()
-    src_kp, src_desc = sift.detectAndCompute(eightbit(source,      prestretch), None)
-    dst_kp, dst_desc = sift.detectAndCompute(eightbit(destination, prestretch), None)
+    src_kp, src_desc = sift.detectAndCompute(_prepare(source),      None)
+    dst_kp, dst_desc = sift.detectAndCompute(_prepare(destination), None)
 
-    matcher = cv2.BFMatcher(cv2.NORM_L2, crossCheck=True)
-    matches = sorted(matcher.match(src_desc, dst_desc), key=lambda x: x.distance)
+    if src_desc is None or dst_desc is None:
+        return np.eye(3, dtype=np.float64)
 
-    src_pts = np.float32([src_kp[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
-    dst_pts = np.float32([dst_kp[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
+    # kNN with k=2 enables the ratio test, which is more robust than crossCheck
+    matcher = cv2.BFMatcher(cv2.NORM_L2)
+    knn     = matcher.knnMatch(src_desc, dst_desc, k=2)
+    good    = [m for m, n in knn if m.distance < _RATIO_THRESH * n.distance]
 
-    homography, _ = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
-    return homography
+    if len(good) < 4:
+        return np.eye(3, dtype=np.float64)
+
+    src_pts = np.float32([src_kp[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
+    dst_pts = np.float32([dst_kp[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
+
+    # affine first - 6 DOF
+    affine, inliers = cv2.estimateAffine2D(
+        src_pts, dst_pts,
+        method                = cv2.RANSAC,
+        ransacReprojThreshold = _RANSAC_THRESH,
+    )
+
+    n_inliers = int(inliers.sum()) if inliers is not None else 0
+
+    if affine is not None and n_inliers >= _MIN_AFFINE_INLIERS:
+        # pad to (3, 3) so cv2.invert and warpPerspective work everywhere downstream
+        return np.vstack([affine, [0.0, 0.0, 1.0]])
+
+    # fall back to full homography when affine doesn't have enough support
+    H, _ = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, _RANSAC_THRESH)
+    return H if H is not None else np.eye(3, dtype=np.float64)
 
 
 def create_bad_pixel_mask(pixmaps, camera, shape=None):
