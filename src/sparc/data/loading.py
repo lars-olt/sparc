@@ -279,14 +279,14 @@ def make_dcs_rgb(load_result: dict) -> np.ndarray:
     """Compute a DCS-stretched RGB from base_bands for use as segmentation input.
 
     ZCAM uses the right-camera DCS preset bands (R6/R3/R1).
-    PCAM uses the left-camera visible bands (L4/L5/L6).
+    PCAM uses the right-camera visible bands (R7/R5/R3).
     Falls back to the existing rgb_img if any band is missing.
     """
     instrument = load_result.get('instrument', 'ZCAM')
     bands      = load_result['base_bands']
 
     if instrument == 'PCAM':
-        keys = ('L4', 'L5', 'L6')
+        keys = ('R7', 'R5', 'R3')
     else:
         keys = ('R6', 'R3', 'R1')
 
@@ -380,7 +380,7 @@ def _load_pcam_cube(iof_path, seq_id, obs_ix, rgb_bands):
         scene_id = bandset.metadata['SEQ_ID'].iloc[0] if 'SEQ_ID' in bandset.metadata.columns else "PCAM_scene"
 
     left_rgb_img  = _pcam_rgb(bands["L4"], bands["L5"], bands["L6"])
-    right_rgb_img = left_rgb_img
+    right_rgb_img = _pcam_rgb(bands["R7"], bands["R5"], bands["R3"])
 
     return {
         "cube":               np.array(merged_arrays),
@@ -391,7 +391,7 @@ def _load_pcam_cube(iof_path, seq_id, obs_ix, rgb_bands):
         "bandset":            bandset,
         "homography_mask":    homography_mask,
         "homography_matrix":  homography_matrix,
-        "rgb_img":            left_rgb_img,
+        "rgb_img":            right_rgb_img,
         "left_rgb_img":       left_rgb_img,
         "right_rgb_img":      right_rgb_img,
         "id":                 scene_id,
