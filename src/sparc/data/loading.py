@@ -199,6 +199,9 @@ def _load_zcam_cube(
     left_cube  = np.array([bands[b] for b in left_band_keys])
     right_cube = np.array([bands[b] for b in right_band_keys])
 
+    left_raw  = np.array([base_bands[b] for b in left_band_keys])
+    right_raw = np.array([base_bands[b] for b in right_band_keys])
+
     left_rgb_img,  left_stretch  = _rgb_from_keys(('L0R', 'L0G', 'L0B'), base_bands, shape, _zcam_rgb)
     right_rgb_img, right_stretch = _rgb_from_keys(('R0R', 'R0G', 'R0B'), base_bands, shape, _zcam_rgb)
 
@@ -345,11 +348,123 @@ def make_dcs_rgb(load_result: dict) -> np.ndarray:
     return _dcs_rgb(r, g, b)
 
 
+def _is_pds4(label) -> bool:
+    """Return True if this is a PDS4 pdr label (single top-level Product_Observational key)."""
+    try:
+        keys = list(label.keys())
+        return keys == ['Product_Observational']
+    except Exception:
+        return False
+
+
+def _pds4_metaget(label, *path):
+    """Walk a chain of keys into a pdr MultiDict, returning None on any miss."""
+    node = label['Product_Observational']
+    for key in path:
+        try:
+            node = node[key]
+        except (KeyError, TypeError):
+            return None
+    return node
+
+
+def _normalise_pcam_label(label) -> dict:
+    """Return a flat dict with the fields downstream code needs, regardless of PDS3/PDS4 format.
+
+    Fields produced:
+      PLANET_DAY_NUMBER, SEQUENCE_ID, ROVER_MOTION_COUNTER (list),
+      SOLAR_ELEVATION, DERIVED_IMAGE_PARMS (dict with RADIANCE_SCALING_FACTOR / RADIANCE_OFFSET).
+
+    Any field that can't be extracted is omitted - callers should use .get().
+    """
+    if not _is_pds4(label):
+        # PDS3 - pdr.Metadata behaves like a dict; just mirror the fields we need.
+        out = {}
+        for key in ('PLANET_DAY_NUMBER', 'SEQUENCE_ID', 'SOLAR_ELEVATION'):
+            try:
+                out[key] = label[key]
+            except (KeyError, TypeError):
+                pass
+        try:
+            rmc = label['ROVER_MOTION_COUNTER']
+            out['ROVER_MOTION_COUNTER'] = list(rmc) if hasattr(rmc, '__iter__') else rmc
+        except (KeyError, TypeError):
+            pass
+        try:
+            out['DERIVED_IMAGE_PARMS'] = label['DERIVED_IMAGE_PARMS']
+        except (KeyError, TypeError):
+            pass
+        return out
+
+    # PDS4 - navigate the MultiDict hierarchy.
+    out = {}
+
+    try:
+        mer = _pds4_metaget(label, 'Observation_Area', 'Mission_Area', 'mer:MER_Parameters')
+        out['PLANET_DAY_NUMBER'] = int(mer['mer:sol_number'])
+    except Exception:
+        pass
+
+    try:
+        cmd = _pds4_metaget(label, 'Observation_Area', 'Discipline_Area',
+                            'msn_surface:Surface_Mission_Information',
+                            'msn_surface:Command_Execution')
+        out['SEQUENCE_ID'] = str(cmd['msn_surface:sequence_id']).strip()
+    except Exception:
+        pass
+
+    try:
+        geom  = _pds4_metaget(label, 'Observation_Area', 'Discipline_Area', 'geom:Geometry')
+        mc    = geom['geom:Motion_Counter']
+        # Motion_Counter_Index entries share a parent - iterate to find PMA.
+        # pdr MultiDict returns a list when a key repeats.
+        indices = mc.getall('geom:Motion_Counter_Index') if hasattr(mc, 'getall') else [mc]
+        rmc     = [0, 0, 0, 0, 0]
+        order   = ['Site', 'Drive', 'IDD', 'PMA', 'HGA']
+        for entry in indices:
+            name = entry.get('geom:index_name', '')
+            if name in order:
+                rmc[order.index(name)] = int(float(entry.get('geom:index_value_number', 0)))
+        out['ROVER_MOTION_COUNTER'] = rmc
+    except Exception:
+        pass
+
+    try:
+        derived = _pds4_metaget(label, 'Observation_Area', 'Discipline_Area',
+                                'geom:Geometry', 'geom:Derived_Geometry')
+        out['SOLAR_ELEVATION'] = float(derived['geom:solar_elevation'])
+    except Exception:
+        pass
+
+    try:
+        elem = _pds4_metaget(label, 'File_Area_Observational', 'Array_2D_Image', 'Element_Array')
+        out['DERIVED_IMAGE_PARMS'] = {
+            'RADIANCE_SCALING_FACTOR': float(elem['scaling_factor']),
+            'RADIANCE_OFFSET':         float(elem['value_offset']),
+        }
+    except Exception:
+        pass
+
+    return out
+
+
+def _pcam_calibration(label) -> tuple:
+    """Return (scale, offset) from a raw pdr label, handling PDS3 and PDS4."""
+    norm = _normalise_pcam_label(label)
+    parms = norm.get('DERIVED_IMAGE_PARMS', {})
+    scale  = float(parms.get('RADIANCE_SCALING_FACTOR', 1.0))
+    offset = float(parms.get('RADIANCE_OFFSET',         0.0))
+    return scale, offset
+
+
 def _load_pcam_cube(iof_path, seq_id, obs_ix, rgb_bands):
     import pdr
     from ..utils.pancam_helpers import get_pcam_bandset
 
-    bandset  = get_pcam_bandset(Path(iof_path), seq_id=seq_id, observation_ix=obs_ix, load=True)
+    # load=False - we read every band ourselves via pdr below, so marslab never
+    # touches the image data directly. This avoids breakage on files whose pdr
+    # key is 'Image_Object' rather than 'IMAGE'.
+    bandset = get_pcam_bandset(Path(iof_path), seq_id=seq_id, observation_ix=obs_ix, load=False)
 
     STEREO_PAIRS  = [("L2", "R2"), ("L7", "R1")]
     stereo_left   = {l for l, r in STEREO_PAIRS}
@@ -364,18 +479,25 @@ def _load_pcam_cube(iof_path, seq_id, obs_ix, rgb_bands):
         data  = pdr.Data(fpath)
         label = data.metadata
         if first_label is None:
-            first_label = label
-        scale  = label["DERIVED_IMAGE_PARMS"]["RADIANCE_SCALING_FACTOR"]
-        offset = label["DERIVED_IMAGE_PARMS"]["RADIANCE_OFFSET"]
-        dn = data['IMAGE'].copy().astype(np.float32)
-        dn = np.where((dn == 0) | (dn == 4095), np.nan, dn)
+            first_label = _normalise_pcam_label(label)
+
+        scale, offset = _pcam_calibration(label)
+        img_key  = 'IMAGE' if 'IMAGE' in data.keys() else 'Image_Object'
+        dn       = np.array(data[img_key]).astype(np.float32)
+        dn      = np.where((dn == 0) | (dn == 4095), np.nan, dn)
         bands[band] = dn * scale + offset
 
     bandset._sparc_label = first_label
 
     if not bands:
         raise ValueError(f"No usable bands loaded from {iof_path}")
-    shape = next(iter(bands.values())).shape
+
+    # Keep only bands at the largest frame size - smaller ones are thumbnails or subframes.
+    all_shapes  = [bands[b].shape for b in bands]
+    modal_shape = max(set(all_shapes), key=all_shapes.count)
+    bands       = {b: a for b, a in bands.items() if a.shape == modal_shape}
+
+    shape = modal_shape
 
     left_band_keys  = sorted(b for b in bands if b.startswith("L"))
     right_band_keys = sorted(b for b in bands if b.startswith("R"))
@@ -388,13 +510,13 @@ def _load_pcam_cube(iof_path, seq_id, obs_ix, rgb_bands):
     left_rgb_img,  left_stretch  = _rgb_from_keys(('L4', 'L5', 'L6'), bands, shape, _pcam_rgb)
     right_rgb_img, right_stretch = _rgb_from_keys(('R7', 'R5', 'R3'), bands, shape, _pcam_rgb)
 
-    # DCS grayscale for homography matching - uses same preferred bands as display
-    left_gray  = cv2.cvtColor(_dcs_rgb(*[bands[k] for k in ('L4', 'L5', 'L6') if k in bands][:3]
-                               or [np.zeros(shape, np.float32)] * 3),
-                               cv2.COLOR_RGB2GRAY).astype(np.float32)
-    right_gray = cv2.cvtColor(_dcs_rgb(*[bands[k] for k in ('R3', 'R5', 'R7') if k in bands][:3]
-                               or [np.zeros(shape, np.float32)] * 3),
-                               cv2.COLOR_RGB2GRAY).astype(np.float32)
+    def _gray_for_homography(keys):
+        available = [bands[k] for k in keys if k in bands]
+        r, g, b   = (available + [np.zeros(shape, np.float32)] * 3)[:3]
+        return cv2.cvtColor(_dcs_rgb(r, g, b), cv2.COLOR_RGB2GRAY).astype(np.float32)
+
+    left_gray  = _gray_for_homography(('L4', 'L5', 'L6'))
+    right_gray = _gray_for_homography(('R3', 'R5', 'R7'))
 
     homography_matrix = compute_homography(left_gray, right_gray)
     left_cube_aligned = apply_homography(left_safe, homography_matrix, shape) if left_safe.size else left_safe
