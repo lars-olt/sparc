@@ -169,7 +169,13 @@ def _load_zcam_cube(
 
     bandset = _bandset_from_group(groups[obs_ix])
 
-    scene_id = bandset.name
+    try:
+        sol      = int(bandset.metadata['SOL'].iloc[0])
+        seq      = str(bandset.metadata['SEQ_ID'].iloc[0]).strip()
+        rsm      = int(bandset.metadata['RSM'].min())
+        scene_id = f"Sol{sol:04d}_{seq}_RSM{rsm}"
+    except Exception:
+        scene_id = bandset.name
     filters  = bandset.metadata["BAND"].sort_values()
     if ignore_bayers:
         filters = filters.loc[~filters.str.contains("0")].reset_index()
@@ -414,10 +420,9 @@ def _normalise_pcam_label(label) -> dict:
         pass
 
     try:
-        geom  = _pds4_metaget(label, 'Observation_Area', 'Discipline_Area', 'geom:Geometry')
-        mc    = geom['geom:Motion_Counter']
-        # Motion_Counter_Index entries share a parent - iterate to find PMA.
-        # pdr MultiDict returns a list when a key repeats.
+        lander  = _pds4_metaget(label, 'Observation_Area', 'Discipline_Area',
+                                'geom:Geometry', 'geom:Geometry_Lander')
+        mc      = lander['geom:Motion_Counter']
         indices = mc.getall('geom:Motion_Counter_Index') if hasattr(mc, 'getall') else [mc]
         rmc     = [0, 0, 0, 0, 0]
         order   = ['Site', 'Drive', 'IDD', 'PMA', 'HGA']
@@ -430,8 +435,9 @@ def _normalise_pcam_label(label) -> dict:
         pass
 
     try:
-        derived = _pds4_metaget(label, 'Observation_Area', 'Discipline_Area',
-                                'geom:Geometry', 'geom:Derived_Geometry')
+        lander  = _pds4_metaget(label, 'Observation_Area', 'Discipline_Area',
+                                'geom:Geometry', 'geom:Geometry_Lander')
+        derived = lander['geom:Derived_Geometry']
         out['SOLAR_ELEVATION'] = float(derived['geom:solar_elevation'])
     except Exception:
         pass

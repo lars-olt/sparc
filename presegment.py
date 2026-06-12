@@ -11,15 +11,22 @@ a pre-segmented file only when the DCS toggle matches the suffix.
 
 Usage:
     python presegment.py <folder> --sam-path <path> [--dcs]
-    python presegment.py <folder> --sam-path <path> --points-per-side 64
+    python presegment.py <folder> --sam-path <path> --points-per-side 64 --workers 8
 """
 
 import argparse
+import queue
 import re
 import sys
+import threading
+import warnings
 from pathlib import Path
 
 import numpy as np
+
+# Suppress known harmless warnings from DCS computation and marslab stretching.
+warnings.filterwarnings("ignore", category=RuntimeWarning, module="numpy")
+warnings.filterwarnings("ignore", category=RuntimeWarning, module="marslab")
 
 # asdf must be in sys.modules before asdf_settings.rapidlooks is imported.
 # loading.py imports asdf_settings at module level, so any sparc import that
@@ -28,7 +35,7 @@ import asdf  # noqa: F401 - primes sys.modules for asdf_settings
 
 
 # Inlined from src.sparc.utils.pancam_helpers to avoid triggering sparc/__init__
-# (and therefore the full loading.py → asdf_settings chain) during scanning.
+# (and therefore the full loading.py -> asdf_settings chain) during scanning.
 _PCAM_FILENAME_RE = re.compile(
     r'^(?P<ROVER>\d)'
     r'P'
@@ -41,6 +48,8 @@ _PCAM_FILENAME_RE = re.compile(
     r'.+$',
     re.IGNORECASE,
 )
+
+_SENTINEL = None  # signals the GPU worker that all loaders are done
 
 
 # ---------------------------------------------------------------------------
@@ -56,16 +65,29 @@ def _is_pcam_folder(folder: Path) -> bool:
 
 
 def _pcam_scene_id(observation) -> str:
-    """Build a PCAM scene ID from the first file's pdr label."""
+    """Build a PCAM scene ID (Sol{sol}_seq_PMA{pma}) from the first file's pdr label."""
     import pdr
+    from src.sparc.data.loading import _normalise_pcam_label
     try:
         label = pdr.Data(observation.iloc[0]['PATH']).metadata
-        sol   = int(label['PLANET_DAY_NUMBER'])
-        seq   = str(label['SEQUENCE_ID']).strip()
-        pma   = int(label['ROVER_MOTION_COUNTER'][3])
+        norm  = _normalise_pcam_label(label)
+        sol   = int(norm['PLANET_DAY_NUMBER'])
+        seq   = str(norm['SEQUENCE_ID']).strip()
+        pma   = int(norm['ROVER_MOTION_COUNTER'][3])
         return f"Sol{sol:04d}_{seq}_PMA{pma}"
     except Exception:
         return str(observation['SEQ_ID'].iloc[0])
+
+
+def _zcam_scene_id(bs) -> str:
+    """Build a ZCAM scene ID (Sol{sol}_seq_RSM{rsm}) from bandset metadata."""
+    try:
+        sol = int(bs.metadata['SOL'].iloc[0])
+        seq = str(bs.metadata['SEQ_ID'].iloc[0]).strip()
+        rsm = int(bs.metadata['RSM'].min())
+        return f"Sol{sol:04d}_{seq}_RSM{rsm}"
+    except Exception:
+        return bs.name
 
 
 def _find_pcam_scenes(folder: Path):
@@ -75,11 +97,33 @@ def _find_pcam_scenes(folder: Path):
         products = scan_pcam_files(folder)
     except Exception:
         return
-    obs_ix = 0
-    for _, group in products.groupby('SEQ_ID'):
-        for obs in split_pcam_observations(group):
-            yield obs['SEQ_ID'].iloc[0], obs_ix, _pcam_scene_id(obs)
-            obs_ix += 1
+
+    import pdr
+
+    def _band_area(path):
+        try:
+            d       = pdr.Data(path)
+            img_key = 'IMAGE' if 'IMAGE' in d.keys() else 'Image_Object'
+            arr     = d[img_key]
+            return arr.shape[0] * arr.shape[1]
+        except Exception:
+            return 0
+
+    def _frame_areas(group):
+        """Return areas per row, reading only one file per unique SCLK to minimise IO."""
+        representatives = group.drop_duplicates('SCLK')
+        areas = representatives['PATH'].map(_band_area)
+        areas.index = representatives.index
+        return group['PATH'].map(lambda _: areas.max())
+
+    for seq_id, group in products.groupby('SEQ_ID'):
+        areas    = _frame_areas(group)
+        max_area = areas.max()
+        if max_area == 0:
+            continue
+        full_frame = group[areas == max_area]
+        for obs_ix, obs in enumerate(split_pcam_observations(full_frame)):
+            yield seq_id, obs_ix, _pcam_scene_id(obs)
 
 
 def _find_zcam_scenes(folder: Path):
@@ -92,19 +136,21 @@ def _find_zcam_scenes(folder: Path):
     for obs_ix, group in enumerate(groups):
         try:
             bs = _bandset_from_group(group)
-            if len(bs.metadata) >= 3 and bs.name:
-                yield None, obs_ix, bs.name
+            if len(bs.metadata) >= 3:
+                yield None, obs_ix, _zcam_scene_id(bs)
         except Exception as e:
             print(f"  Warning: skipping obs {obs_ix} in {folder.name}: {e}")
 
 
-def find_scenes(root: Path):
+def find_scenes(root: Path, suffix: str, dcs_with_fallback: bool = False):
     """
-    Find all scenes up to one level deep.
+    Find all unprocessed scenes up to one level deep.
 
+    Skips scenes whose NPZ already exists before any IO-heavy work.
+    In dcs-with-fallback mode, skips if either the _dcs or plain variant exists.
     Yields (folder, instrument, seq_id, obs_ix, scene_id).
     """
-    candidates = [root] + sorted(d for d in root.iterdir() if d.is_dir())
+    candidates = [root] + sorted(root / d.name for d in root.iterdir() if d.is_dir())
     seen = set()
 
     for folder in candidates:
@@ -117,15 +163,75 @@ def find_scenes(root: Path):
         finder     = _find_pcam_scenes if instrument == 'PCAM' else _find_zcam_scenes
 
         for seq_id, obs_ix, scene_id in finder(folder):
-            key = (str(folder), obs_ix)
-            if key not in seen:
-                seen.add(key)
-                yield folder, instrument, seq_id, obs_ix, scene_id
+            key = (str(folder), seq_id, obs_ix)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            if dcs_with_fallback:
+                already_done = (
+                    (Path(str(folder)) / f"{scene_id}_dcs.npz").exists() or
+                    (Path(str(folder)) / f"{scene_id}.npz").exists()
+                )
+            else:
+                already_done = (Path(str(folder)) / f"{scene_id}{suffix}.npz").exists()
+
+            if already_done:
+                print(f"  Skipping {scene_id} - already segmented.")
+                continue
+
+            yield folder, instrument, seq_id, obs_ix, scene_id
 
 
 # ---------------------------------------------------------------------------
-# Segmentation
+# Pipeline workers
 # ---------------------------------------------------------------------------
+
+def _loader_worker(scenes_chunk, suffix, use_dcs, use_dcs_with_fallback, load_queue, print_lock):
+    """Load scenes from disk and push RGB images onto the queue."""
+    import warnings
+    warnings.filterwarnings("ignore", category=RuntimeWarning)
+
+    from src.sparc.data.loading import load_cube, make_dcs_rgb
+
+    for folder, instrument, seq_id, obs_ix, scene_id in scenes_chunk:
+        try:
+            load_result = load_cube(
+                iof_path         = str(folder),
+                instrument       = instrument,
+                seq_id           = seq_id,
+                obs_ix           = obs_ix,
+                do_apply_pixmaps = True,
+                ignore_bayers    = False,
+            )
+
+            if use_dcs_with_fallback:
+                # use DCS only if the preferred bands were all present
+                stretch = load_result.get('stretch_bands', {})
+                camera  = 'right' if instrument == 'ZCAM' else 'right'
+                dcs_available = stretch.get(camera, False)
+                actual_suffix = '_dcs' if dcs_available else ''
+                rgb_img = make_dcs_rgb(load_result) if dcs_available else load_result['rgb_img']
+            elif use_dcs:
+                actual_suffix = '_dcs'
+                rgb_img = make_dcs_rgb(load_result)
+            else:
+                actual_suffix = ''
+                rgb_img = load_result['rgb_img']
+
+            npz_path = Path(str(folder)) / f"{scene_id}{actual_suffix}.npz"
+            if npz_path.exists():
+                with print_lock:
+                    print(f"  Skipping {scene_id} - already segmented.")
+                continue
+
+            load_queue.put((scene_id, rgb_img, npz_path))
+        except Exception as e:
+            with print_lock:
+                print(f"  Load failed [{scene_id}]: {e}")
+
+    load_queue.put(_SENTINEL)
+
 
 def _segment(rgb_img: np.ndarray, sam_path: str, params: dict) -> np.ndarray:
     """Run SAM on rgb_img and return a 2D int32 segment label array."""
@@ -154,12 +260,17 @@ def main():
         help='Path to SAM model checkpoint (.pth)')
     parser.add_argument('--dcs', action='store_true',
         help='Segment using the decorrelation stretch (files saved with _dcs suffix)')
+    parser.add_argument('--dcs-with-fallback', action='store_true',
+        help='Use DCS if preferred bands exist, otherwise fall back to regular RGB. '
+             'Files are saved with _dcs suffix only when DCS was actually used.')
     parser.add_argument('--points-per-side', type=int, default=32,
         help='SAM sampling density (default: 32)')
     parser.add_argument('--pred-iou-thresh', type=float, default=0.88,
         help='SAM IoU confidence threshold (default: 0.88)')
     parser.add_argument('--preserve-background', action='store_true',
         help='Assign unclassified pixels to segment 0 instead of the last segment')
+    parser.add_argument('--workers', type=int, default=4,
+        help='Number of parallel loader threads (default: 4)')
     args = parser.parse_args()
 
     root = Path(args.folder)
@@ -167,6 +278,11 @@ def main():
         print(f"Error: {root} is not a directory.", file=sys.stderr)
         sys.exit(1)
 
+    if args.dcs and args.dcs_with_fallback:
+        print("Error: --dcs and --dcs-with-fallback are mutually exclusive.", file=sys.stderr)
+        sys.exit(1)
+
+    use_dcs_with_fallback = args.dcs_with_fallback
     suffix = '_dcs' if args.dcs else ''
     params = {
         'preserve_background': args.preserve_background,
@@ -175,58 +291,79 @@ def main():
     }
 
     print(f"Scanning {root} for scenes...")
-    scenes = list(find_scenes(root))
+    scenes = list(find_scenes(root, suffix, dcs_with_fallback=use_dcs_with_fallback))
 
     if not scenes:
-        print("No scenes found.")
+        print("No scenes to process.")
         return
 
-    print(f"Found {len(scenes)} scene(s).")
+    total = len(scenes)
+    print(f"\n{total} scene(s) to process. Loading with {args.workers} threads.\n")
     if args.dcs:
-        print("DCS mode: segmenting decorrelation-stretched images (_dcs suffix).")
-    print()
+        print("DCS mode: segmenting decorrelation-stretched images (_dcs suffix).\n")
+    elif use_dcs_with_fallback:
+        print("DCS-with-fallback mode: uses DCS when available, regular RGB otherwise.\n")
 
-    from src.sparc.data.loading import load_cube, make_dcs_rgb
+    # Distribute scenes evenly across loader threads.
+    chunk_size   = max(1, (total + args.workers - 1) // args.workers)
+    chunks       = [scenes[i:i + chunk_size] for i in range(0, total, chunk_size)]
+    load_queue   = queue.Queue(maxsize=args.workers * 2)  # bound to limit memory
+    print_lock   = threading.Lock()
 
-    for i, (folder, instrument, seq_id, obs_ix, scene_id) in enumerate(scenes, 1):
-        npz_path = folder / f"{scene_id}{suffix}.npz"
-        print(f"[{i}/{len(scenes)}] {scene_id}  ({instrument})")
+    # Start loader threads - they fill the queue as fast as disk allows.
+    loaders = []
+    for chunk in chunks:
+        t = threading.Thread(
+            target=_loader_worker,
+            args=(chunk, suffix, args.dcs, use_dcs_with_fallback, load_queue, print_lock),
+            daemon=True,
+        )
+        t.start()
+        loaders.append(t)
 
-        if npz_path.exists():
-            print(f"  Skipping - {npz_path.name} already exists.\n")
+    # GPU worker runs in the main thread - drains queue and runs SAM sequentially.
+    # Each loader thread posts a sentinel when it finishes; we exit when all are received.
+    n_loaders  = len(loaders)
+    done_count = 0
+    attempted  = 0
+    completed  = 0
+
+    while done_count < n_loaders:
+        item = load_queue.get()
+
+        if item is _SENTINEL:
+            done_count += 1
             continue
 
-        print(f"  Loading scene from {folder.name}...")
-        try:
-            load_result = load_cube(
-                iof_path         = str(folder),
-                instrument       = instrument,
-                seq_id           = seq_id,
-                obs_ix           = obs_ix,
-                do_apply_pixmaps = True,
-                ignore_bayers    = False,
-            )
-        except Exception as e:
-            print(f"  Load failed: {e}\n")
-            continue
+        scene_id, rgb_img, npz_path = item
+        H, W      = rgb_img.shape[:2]
+        attempted += 1
 
-        rgb_img = load_result['rgb_img']
-        if args.dcs:
-            rgb_img = make_dcs_rgb(load_result)
+        with print_lock:
+            print(f"[{attempted}/{total}] {scene_id}  {W}x{H}")
 
-        H, W = rgb_img.shape[:2]
-        print(f"  Segmenting {W}x{H} image...")
         try:
             segments = _segment(rgb_img, args.sam_path, params)
         except Exception as e:
-            print(f"  Segmentation failed: {e}\n")
+            with print_lock:
+                print(f"  Segmentation failed: {e}\n")
             continue
 
         n_segs = len(np.unique(segments)) - (1 if 0 in segments else 0)
-        np.savez_compressed(str(npz_path), segments=segments, dcs=np.bool_(args.dcs))
-        print(f"  {n_segs} segments → {npz_path.name}\n")
+        if n_segs == 0:
+            with print_lock:
+                print(f"  0 segments - skipping.\n")
+            continue
 
-    print("Done.")
+        np.savez_compressed(str(npz_path), segments=segments, dcs=np.bool_(args.dcs))
+        completed += 1
+        with print_lock:
+            print(f"  {n_segs} segments -> {npz_path.name}\n")
+
+    for t in loaders:
+        t.join()
+
+    print(f"Done. {completed}/{total} scene(s) segmented.")
 
 
 if __name__ == '__main__':
