@@ -25,7 +25,7 @@ _PCAM_FILENAME_RE = re.compile(
     re.IGNORECASE,
 )
 
-_INVALID_FILTERS = frozenset({'L0', 'L8', 'R8'})
+_INVALID_FILTERS = frozenset({'L0', 'L1', 'L8', 'R8'})
 
 
 def parse_pcam_fn(filepath):
