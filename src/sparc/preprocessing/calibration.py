@@ -16,10 +16,16 @@ def apply_photometric_calibration(masked_cube: np.ndarray,
     Convert IOF to R* via R* = IOF / cos(θ).
 
     θ is derived from INCIDENCE_ANGLE (ZCAM) or SOLAR_ELEVATION (Pancam).
+    Falls back to uncalibrated IOF if the angle cannot be determined.
     """
     if not apply_r_star:
         return masked_cube
-    return masked_cube / np.cos(np.radians(extract_incidence_angle(bandset_metadata)))
+    try:
+        angle = extract_incidence_angle(bandset_metadata)
+    except ValueError as e:
+        logger.warning(f"R* calibration skipped: {e}")
+        return masked_cube
+    return masked_cube / np.cos(np.radians(angle))
 
 
 def extract_incidence_angle(metadata: Any) -> float:
@@ -28,7 +34,7 @@ def extract_incidence_angle(metadata: Any) -> float:
 
     ZCAM:  reads INCIDENCE_ANGLE directly from the bandset DataFrame.
     Pancam: converts SOLAR_ELEVATION from the PDS label using
-            θ = (solar_elevation + 90) × 2pi / 360.
+            theta = (solar_elevation + 90) * 2pi / 360.
 
     Raises ValueError if the angle cannot be determined.
     """
@@ -50,7 +56,7 @@ def extract_incidence_angle(metadata: Any) -> float:
             raise ValueError("SOLAR_ELEVATION value is null in PDS label.")
         return math.degrees((val + 90) * 2 * np.pi / 360)
 
-    # Plain dict - used in tests
+    # Plain dict - normalized label from _normalise_pcam_label
     if isinstance(metadata, dict):
         solar_elev = (
             metadata.get('SITE_DERIVED_GEOMETRY_PARMS', {}).get('SOLAR_ELEVATION')
