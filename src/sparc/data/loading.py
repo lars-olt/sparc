@@ -208,8 +208,8 @@ def _load_zcam_cube(
     left_raw  = np.array([base_bands[b] for b in left_band_keys])
     right_raw = np.array([base_bands[b] for b in right_band_keys])
 
-    left_rgb_img,  left_stretch  = _rgb_from_keys(('L0R', 'L0G', 'L0B'), base_bands, shape, _zcam_rgb)
-    right_rgb_img, right_stretch = _rgb_from_keys(('R0R', 'R0G', 'R0B'), base_bands, shape, _zcam_rgb)
+    left_rgb_img,  left_stretch  = _rgb_from_keys(('L2', 'L5', 'L7'), bands, shape, _pcam_rgb)
+    right_rgb_img, right_stretch = _rgb_from_keys(('R2', 'R1', 'R1'), bands, shape, _pcam_rgb)
 
     # homography requires both shared bands - fall back to identity if either is missing
     l_shared = SHARED_BANDS["L"]
