@@ -44,6 +44,14 @@ _TEMPLATE_NAMES = {
     "pcam": "blank_pcam.sel",
 }
 
+# Pancam scenes come in a few fixed frame sizes. Each needs its own blank, since
+# the template carries the frame's sensor placement (POS blocks) baked in by
+# MERSpect - a full-frame blank would pin a subframe scene to the sensor origin.
+# Keyed by (height, width); falls back to blank_pcam.sel when a size isn't listed.
+_PCAM_SIZED_TEMPLATES = {
+    (300, 300): "blank_pcam_300x300.sel",
+}
+
 # MERSpect label conventions differ between instruments.
 # MCZ: background=0, first ROI=4.
 # Pancam: background=15, first ROI=0.
@@ -74,15 +82,21 @@ def export_sel(
 ) -> None:
     """Write a merspect-compatible .sel file by patching a blank template.
 
+    ROI masks are painted in local scene coordinates. Everything that tells
+    MERSpect where the scene frame sits on the full sensor - the POS blocks -
+    comes from the template, so a scene-size-matched template must be supplied
+    for subframe scenes (see _resolve_template, which picks one by image_shape).
+
     Args:
         output_path:      Destination path.
-        final_rois:       Right-camera ROIs (N, 4) as (x, y, w, h), full-sensor coords.
-        final_left_rois:  Left-camera ROIs  (N, 4) as (x, y, w, h), full-sensor coords.
-        image_shape:      Full sensor frame (height, width).
+        final_rois:       Right-camera ROIs (N, 4) as (x, y, w, h), scene coords.
+        final_left_rois:  Left-camera ROIs  (N, 4) as (x, y, w, h), scene coords.
+        image_shape:      Scene frame (height, width) - the size the mask is painted
+                          at, and the size the template must match.
         left_filenames:   Reserved for future REGION_INFO patching (unused).
         right_filenames:  Reserved for future REGION_INFO patching (unused).
         template_path:    Path to a blank .sel template. If omitted, the packaged
-                          template for 'instrument' is used.
+                          template for 'instrument' and image_shape is used.
         instrument:       "ZCAM"/"MCZ" or "PCAM"/"PANCAM".
         first_region_id:  Override the first ROI label (instrument default if None).
                           Ignored when label_ids is provided.
@@ -96,8 +110,8 @@ def export_sel(
     first_region_id  = defaults["first_id"]   if first_region_id  is None else first_region_id
     background_value = defaults["background"] if background_value is None else background_value
 
-    template   = _read_template(_resolve_template(template_path, inst_key))
     H, W       = _validated_shape(image_shape)
+    template   = _read_template(_resolve_template(template_path, inst_key, (H, W)))
     left_rois  = _coerce_rois(final_left_rois)
     right_rois = _coerce_rois(final_rois)
 
@@ -150,12 +164,26 @@ def filenames_from_load_result(load_result: dict, n_rois: int) -> Tuple[List[str
     return [left] * n_rois, [right] * n_rois
 
 
-def get_default_template_path(instrument: Optional[str] = None) -> Path:
-    """Return the path to the packaged blank .sel template for this instrument."""
-    inst_key = _normalize_instrument(instrument)
-    name     = _TEMPLATE_NAMES[inst_key]
+def _template_name(inst_key: str, image_shape: Optional[Tuple[int, int]]) -> str:
+    """Blank template filename for an instrument and optional scene size.
 
-    resource = _resource_path(inst_key)
+    Pancam subframe sizes each have their own blank so the frame's sensor
+    placement is correct; everything else falls back to the instrument default.
+    """
+    if inst_key == "pcam" and image_shape is not None:
+        sized = _PCAM_SIZED_TEMPLATES.get(tuple(image_shape))
+        if sized is not None:
+            return sized
+    return _TEMPLATE_NAMES[inst_key]
+
+
+def get_default_template_path(instrument: Optional[str] = None,
+                              image_shape: Optional[Tuple[int, int]] = None) -> Path:
+    """Return the path to the packaged blank .sel template for this instrument and size."""
+    inst_key = _normalize_instrument(instrument)
+    name     = _template_name(inst_key, image_shape)
+
+    resource = _resource_path(name)
     if resource is not None:
         return resource
 
@@ -170,6 +198,11 @@ def get_default_template_path(instrument: Optional[str] = None) -> Path:
     for p in candidates:
         if p.is_file():
             return p
+
+    # A missing sized template falls back to the instrument default rather than
+    # failing outright - the frame placement will be wrong, but export still works.
+    if name != _TEMPLATE_NAMES[inst_key]:
+        return get_default_template_path(instrument=inst_key)
 
     raise FileNotFoundError(
         f"No blank .sel template found for {inst_key!r}. "
@@ -204,7 +237,8 @@ def _normalize_instrument(instrument: Optional[str]) -> str:
     return _INSTRUMENT_ALIASES[key]
 
 
-def _resolve_template(template_path: Optional[str], inst_key: str) -> Path:
+def _resolve_template(template_path: Optional[str], inst_key: str,
+                      image_shape: Optional[Tuple[int, int]] = None) -> Path:
     if template_path:
         p = Path(template_path)
         if not p.is_file():
@@ -218,11 +252,11 @@ def _resolve_template(template_path: Optional[str], inst_key: str) -> Path:
             raise FileNotFoundError(f"SPARC_SEL_TEMPLATE points to missing file: {p}")
         return p
 
-    return get_default_template_path(instrument=inst_key)
+    return get_default_template_path(instrument=inst_key, image_shape=image_shape)
 
 
-def _resource_path(inst_key: str) -> Optional[Path]:
-    """Locate a packaged template via importlib.resources."""
+def _resource_path(name: str) -> Optional[Path]:
+    """Locate a packaged template by filename via importlib.resources."""
     try:
         from importlib.resources import files
     except ImportError:
@@ -232,7 +266,6 @@ def _resource_path(inst_key: str) -> Optional[Path]:
     if not package:
         return None
 
-    name = _TEMPLATE_NAMES[inst_key]
     for pkg in (f"{package}.resources", package):
         try:
             ref = files(pkg).joinpath(name)
