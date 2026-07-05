@@ -18,6 +18,12 @@ _RATIO_THRESH       = 0.75  # Lowe ratio test
 _RANSAC_THRESH      = 2.5   # reprojection threshold in pixels
 _MIN_AFFINE_INLIERS = 20    # fall back to homography below this count
 
+# Fixed RANSAC settings so stereo alignment is reproducible run to run and across
+# machines - a drifting homography shifts every ROI derived from it.
+_HOMOGRAPHY_SEED    = 42
+_RANSAC_MAX_ITERS   = 5000
+_RANSAC_CONFIDENCE  = 0.999
+
 _CLAHE = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
 
 
@@ -463,6 +469,8 @@ def _pcam_calibration(label) -> tuple:
     return scale, offset
 
 
+
+
 def _load_pcam_cube(iof_path, seq_id, obs_ix, rgb_bands):
     import pdr
     from ..utils.pancam_helpers import get_pcam_bandset
@@ -654,11 +662,23 @@ def compute_homography(source, destination, prestretch=1):
     src_pts = np.float32([src_kp[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
     dst_pts = np.float32([dst_kp[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
 
-    # affine first - 6 DOF is less likely to overfit noise on a wide-baseline pair
+    # Sort matches by (source x, y) so the point ordering fed to RANSAC is
+    # independent of match-iteration order, which can vary across OpenCV builds.
+    order   = np.lexsort((src_pts[:, 0, 1], src_pts[:, 0, 0]))
+    src_pts = src_pts[order]
+    dst_pts = dst_pts[order]
+
+    # affine first - 6 DOF is less likely to overfit noise on a wide-baseline pair.
+    # Seed OpenCV's RNG and pin the iteration count so RANSAC is reproducible -
+    # otherwise the same scene warps slightly differently run to run and machine
+    # to machine, shifting every homography-derived ROI.
+    cv2.setRNGSeed(_HOMOGRAPHY_SEED)
     affine, inliers = cv2.estimateAffine2D(
         src_pts, dst_pts,
         method                = cv2.RANSAC,
         ransacReprojThreshold = _RANSAC_THRESH,
+        maxIters              = _RANSAC_MAX_ITERS,
+        confidence            = _RANSAC_CONFIDENCE,
     )
 
     n_inliers = int(inliers.sum()) if inliers is not None else 0
@@ -668,7 +688,9 @@ def compute_homography(source, destination, prestretch=1):
         return np.vstack([affine, [0.0, 0.0, 1.0]])
 
     # fall back to full homography when affine doesn't have enough support
-    H, _ = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, _RANSAC_THRESH)
+    cv2.setRNGSeed(_HOMOGRAPHY_SEED)
+    H, _ = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, _RANSAC_THRESH,
+                              maxIters=_RANSAC_MAX_ITERS, confidence=_RANSAC_CONFIDENCE)
     return H if H is not None else np.eye(3, dtype=np.float64)
 
 
