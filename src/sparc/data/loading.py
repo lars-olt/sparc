@@ -11,7 +11,7 @@ from marslab.imgops.imgutils import crop, eightbit
 import asdf_settings.metadata
 from asdf_settings import rapidlooks
 
-from ..core.constants import SHARED_BANDS, BAD_PIXEL_FLAGS
+from ..core.constants import SHARED_BANDS, BAD_PIXEL_FLAGS, RGB_ENHANCE_KWARGS
 
 
 _RATIO_THRESH       = 0.75  # Lowe ratio test
@@ -289,6 +289,11 @@ def _zcam_rgb(r_b, g_b, b_b):
 # Pancam
 # ---------------------------------------------------------------------------
 
+# Default Pancam display bands
+_PCAM_LEFT_RGB  = ('L4', 'L5', 'L6')
+_PCAM_RIGHT_RGB = ('R7', 'R5', 'R3')
+
+
 def _pcam_rgb(r_b, g_b, b_b):
     """Per-channel percentile-stretched RGB from IOF bands."""
     channels = []
@@ -304,7 +309,7 @@ def _pcam_rgb(r_b, g_b, b_b):
     return (np.stack(channels, axis=-1) * 255).astype(np.uint8)
 
 
-def _dcs_rgb(r_b, g_b, b_b):
+def dcs_rgb(r_b, g_b, b_b):
     """Decorrelation stretch of three bands to uint8 RGB.
 
     Applies eigenspace rotation to remove inter-band correlation, giving
@@ -351,13 +356,13 @@ def make_dcs_rgb(load_result: dict) -> np.ndarray:
     instrument = load_result.get('instrument', 'ZCAM')
     bands      = load_result['base_bands']
 
-    keys = ('R7', 'R5', 'R3') if instrument == 'PCAM' else ('R6', 'R3', 'R1')
+    keys = _PCAM_RIGHT_RGB if instrument == 'PCAM' else ('R6', 'R3', 'R1')
 
     r, g, b = (bands.get(k) for k in keys)
     if any(x is None for x in (r, g, b)):
         return load_result['rgb_img']
 
-    return _dcs_rgb(r, g, b)
+    return dcs_rgb(r, g, b)
 
 
 def _is_pds4(label) -> bool:
@@ -521,15 +526,15 @@ def _load_pcam_cube(iof_path, seq_id, obs_ix, rgb_bands):
     left_safe  = np.where(np.isfinite(left_cube),  left_cube,  0.0)
     right_safe = np.where(np.isfinite(right_cube), right_cube, 0.0)
 
-    left_rgb_img,  left_stretch  = _rgb_from_keys(('L4', 'L5', 'L6'), bands, shape, _pcam_rgb)
-    right_rgb_img, right_stretch = _rgb_from_keys(('R7', 'R5', 'R3'), bands, shape, _pcam_rgb)
+    left_rgb_img,  left_stretch  = _rgb_from_keys(_PCAM_LEFT_RGB, bands, shape, _pcam_rgb)
+    right_rgb_img, right_stretch = _rgb_from_keys(_PCAM_RIGHT_RGB, bands, shape, _pcam_rgb)
 
     def _gray_for_homography(keys):
         available = [bands[k] for k in keys if k in bands]
         r, g, b   = (available + [np.zeros(shape, np.float32)] * 3)[:3]
-        return cv2.cvtColor(_dcs_rgb(r, g, b), cv2.COLOR_RGB2GRAY).astype(np.float32)
+        return cv2.cvtColor(dcs_rgb(r, g, b), cv2.COLOR_RGB2GRAY).astype(np.float32)
 
-    left_gray  = _gray_for_homography(('L4', 'L5', 'L6'))
+    left_gray  = _gray_for_homography(_PCAM_LEFT_RGB)
     right_gray = _gray_for_homography(('R3', 'R5', 'R7'))
 
     homography_matrix = compute_homography(left_gray, right_gray)
@@ -717,5 +722,5 @@ def apply_pixel_masks(bands, pixmaps):
 def create_rgb_stretch(cube):
     from marslab.imgops.imgutils import enhance_color
     rgb    = np.stack([cube[0], cube[1], cube[2]], axis=-1)
-    result = enhance_color(np.ma.masked_invalid(rgb), bounds=(0, 1), stretch=0.1)
+    result = enhance_color(np.ma.masked_invalid(rgb), **RGB_ENHANCE_KWARGS)
     return np.ascontiguousarray(np.ma.filled(result, 0) * 255, dtype=np.uint8)

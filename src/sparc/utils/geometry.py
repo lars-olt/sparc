@@ -5,7 +5,7 @@ import cv2
 from scipy.ndimage import distance_transform_edt
 from typing import Tuple, Optional
 
-from ..core.constants import _EDGE_MASK_CACHE, RGB_BANDS
+from ..core.constants import _EDGE_MASK_CACHE, RGB_BANDS, RGB_ENHANCE_KWARGS
 
 
 def find_center_of_mass(mask: np.ndarray) -> Tuple[int, int]:
@@ -125,7 +125,7 @@ def create_rgb_image(cube: np.ndarray) -> np.ndarray:
     rgb_dict  = {band: cube[i] for i, band in enumerate(RGB_BANDS)}
     rgb_stack  = np.stack([rgb_dict['R'], rgb_dict['G'], rgb_dict['B']], axis=-1)
     rgb_masked = np.ma.masked_invalid(rgb_stack)
-    return enhance_color(rgb_masked, bounds=(0, 1), stretch=0.1)
+    return enhance_color(rgb_masked, **RGB_ENHANCE_KWARGS)
 
 
 # Aliases for backward compatibility

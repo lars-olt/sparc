@@ -28,6 +28,9 @@ DEFAULT_ALBEDO_RATIO_THRESHOLD = 0.80
 
 _EDGE_MASK_CACHE: dict = {}
 
+# Shared display-stretch parameters for enhance_color.
+RGB_ENHANCE_KWARGS = {'bounds': (0, 1), 'stretch': 0.1}
+
 
 def get_instrument_config(instrument: str) -> Dict[str, Any]:
     """Return instrument-specific configuration derived from marslab's DERIVED_CAM_DICT."""
