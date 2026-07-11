@@ -328,7 +328,10 @@ def _coerce_rois(rois: np.ndarray) -> np.ndarray:
         return np.empty((0, 4), dtype=np.int32)
     if rois.ndim != 2 or rois.shape[1] != 4:
         raise ValueError("ROIs must be shape (N, 4).")
-    return rois.astype(np.int32, copy=False)
+    if np.issubdtype(rois.dtype, np.integer):
+        return rois.astype(np.int32, copy=False)
+    # truncation drags edges up to a pixel toward zero
+    return np.rint(rois).astype(np.int32)
 
 
 def _build_mask(
