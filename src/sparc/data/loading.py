@@ -397,7 +397,7 @@ def _normalise_pcam_label(label) -> dict:
     if not _is_pds4(label):
         # PDS3 - pdr.Metadata behaves like a dict; just mirror the fields we need.
         out = {}
-        for key in ('PLANET_DAY_NUMBER', 'SEQUENCE_ID', 'SOLAR_ELEVATION'):
+        for key in ('PLANET_DAY_NUMBER', 'SEQUENCE_ID', 'SEQUENCE_VERSION_ID', 'SOLAR_ELEVATION'):
             try:
                 out[key] = label[key]
             except (KeyError, TypeError):
@@ -427,6 +427,11 @@ def _normalise_pcam_label(label) -> dict:
                             'msn_surface:Surface_Mission_Information',
                             'msn_surface:Command_Execution')
         out['SEQUENCE_ID'] = str(cmd['msn_surface:sequence_id']).strip()
+        # separate try so a missing version doesn't take the sequence id down with it
+        try:
+            out['SEQUENCE_VERSION_ID'] = str(cmd['msn_surface:sequence_version_id']).strip()
+        except Exception:
+            pass
     except Exception:
         pass
 
@@ -463,6 +468,18 @@ def _normalise_pcam_label(label) -> dict:
         pass
 
     return out
+
+
+def pcam_seq_token(norm: dict) -> str:
+    """Fold sequence version onto the sequence id, e.g. 'p2530' + '1' -> 'p2530v1'.
+
+    seq_ver only means anything paired with its sequence, so it rides along in the
+    same token that identifies a pointing. Drops the suffix if the version is absent
+    so PDS3 files with no version still get a usable id.
+    """
+    seq = str(norm.get('SEQUENCE_ID', '')).strip()
+    ver = str(norm.get('SEQUENCE_VERSION_ID', '')).strip()
+    return f"{seq}v{ver}" if ver else seq
 
 
 def _pcam_calibration(label) -> tuple:
@@ -580,7 +597,7 @@ def _load_pcam_cube(iof_path, seq_id, obs_ix, rgb_bands):
 
     try:
         sol      = int(first_label['PLANET_DAY_NUMBER'])
-        seq      = str(first_label['SEQUENCE_ID']).strip()
+        seq      = pcam_seq_token(first_label)
         pma      = int(first_label['ROVER_MOTION_COUNTER'][3])  # PMA is index 3: (SITE, DRIVE, IDD, PMA, HGA)
         scene_id = f"Sol{sol:04d}_{seq}_PMA{pma}"
     except Exception:

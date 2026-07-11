@@ -29,13 +29,20 @@ warnings.filterwarnings("ignore", category=RuntimeWarning, module="numpy")
 warnings.filterwarnings("ignore", category=RuntimeWarning, module="marslab")
 
 # asdf must be in sys.modules before asdf_settings.rapidlooks is imported.
-# loading.py imports asdf_settings at module level, so any sparc import that
-# triggers the package init chain will fail unless asdf is already loaded.
-import asdf  # noqa: F401 - primes sys.modules for asdf_settings
+# loading.py imports asdf_settings at module level, so the sparc imports below
+# would fail unless asdf is already loaded.
+import asdf
+import pdr
+
+from src.sparc.data.loading import (_scan_and_split, _bandset_from_group,
+                                    _normalise_pcam_label, load_cube,
+                                    make_dcs_rgb, pcam_seq_token)
+from src.sparc.segmentation.sam_segmentation import segment_image
+from src.sparc.utils.pancam_helpers import scan_pcam_files, split_pcam_observations
 
 
-# Inlined from src.sparc.utils.pancam_helpers to avoid triggering sparc/__init__
-# (and therefore the full loading.py -> asdf_settings chain) during scanning.
+# Local copy of the Pancam filename pattern - _is_pcam_folder only needs a
+# cheap match, not the full parse that pancam_helpers does.
 _PCAM_FILENAME_RE = re.compile(
     r'^(?P<ROVER>\d)'
     r'P'
@@ -65,14 +72,12 @@ def _is_pcam_folder(folder: Path) -> bool:
 
 
 def _pcam_scene_id(observation) -> str:
-    """Build a PCAM scene ID (Sol{sol}_seq_PMA{pma}) from the first file's pdr label."""
-    import pdr
-    from src.sparc.data.loading import _normalise_pcam_label
+    """Build a PCAM scene ID (Sol{sol}_seqVver_PMA{pma}) from the first file's pdr label."""
     try:
         label = pdr.Data(observation.iloc[0]['PATH']).metadata
         norm  = _normalise_pcam_label(label)
         sol   = int(norm['PLANET_DAY_NUMBER'])
-        seq   = str(norm['SEQUENCE_ID']).strip()
+        seq   = pcam_seq_token(norm)
         pma   = int(norm['ROVER_MOTION_COUNTER'][3])
         return f"Sol{sol:04d}_{seq}_PMA{pma}"
     except Exception:
@@ -92,13 +97,10 @@ def _zcam_scene_id(bs) -> str:
 
 def _find_pcam_scenes(folder: Path):
     """Yield (seq_id, obs_ix, scene_id) for each PCAM pointing in folder."""
-    from src.sparc.utils.pancam_helpers import scan_pcam_files, split_pcam_observations
     try:
         products = scan_pcam_files(folder)
     except Exception:
         return
-
-    import pdr
 
     def _band_area(path):
         try:
@@ -128,7 +130,6 @@ def _find_pcam_scenes(folder: Path):
 
 def _find_zcam_scenes(folder: Path):
     """Yield (seq_id=None, obs_ix, scene_id) for each ZCAM pointing in folder."""
-    from src.sparc.data.loading import _scan_and_split, _bandset_from_group
     try:
         groups = _scan_and_split(folder)
     except Exception:
@@ -189,10 +190,7 @@ def find_scenes(root: Path, suffix: str, dcs_with_fallback: bool = False):
 
 def _loader_worker(scenes_chunk, suffix, use_dcs, use_dcs_with_fallback, load_queue, print_lock):
     """Load scenes from disk and push RGB images onto the queue."""
-    import warnings
     warnings.filterwarnings("ignore", category=RuntimeWarning)
-
-    from src.sparc.data.loading import load_cube, make_dcs_rgb
 
     for folder, instrument, seq_id, obs_ix, scene_id in scenes_chunk:
         try:
@@ -235,7 +233,6 @@ def _loader_worker(scenes_chunk, suffix, use_dcs, use_dcs_with_fallback, load_qu
 
 def _segment(rgb_img: np.ndarray, sam_path: str, params: dict) -> np.ndarray:
     """Run SAM on rgb_img and return a 2D int32 segment label array."""
-    from src.sparc.segmentation.sam_segmentation import segment_image
     return segment_image(
         model_path          = sam_path,
         img                 = rgb_img,
