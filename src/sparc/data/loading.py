@@ -482,6 +482,56 @@ def pcam_seq_token(norm: dict) -> str:
     return f"{seq}v{ver}" if ver else seq
 
 
+def observation_metadata(load_result: dict) -> dict:
+    """Flatten per-observation metadata from a load_result for export headers.
+
+    Returns the full composite key plus localization and photometric context.
+    Fields that can't be derived are omitted - consumers should use .get().
+
+    PCAM: SOL, SEQ_ID, SEQ_VER, PMA, SITE, DRIVE, SOLAR_ELEVATION.
+    ZCAM: SOL, SEQ_ID, RSM.
+    """
+    instrument = load_result.get('instrument', 'ZCAM')
+    bandset    = load_result.get('bandset')
+
+    meta = {
+        'SCENE_ID':   load_result.get('id', ''),
+        'INSTRUMENT': instrument,
+    }
+
+    if instrument == 'PCAM':
+        norm = getattr(bandset, '_sparc_label', None) or {}
+        try:
+            meta['SOL'] = int(norm['PLANET_DAY_NUMBER'])
+        except Exception:
+            pass
+        if 'SEQUENCE_ID' in norm:
+            meta['SEQ_ID'] = str(norm['SEQUENCE_ID']).strip()
+        if 'SEQUENCE_VERSION_ID' in norm:
+            meta['SEQ_VER'] = str(norm['SEQUENCE_VERSION_ID']).strip()
+        try:
+            rmc = norm['ROVER_MOTION_COUNTER']
+            meta['SITE']  = int(rmc[0])
+            meta['DRIVE'] = int(rmc[1])
+            meta['PMA']   = int(rmc[3])
+        except Exception:
+            pass
+        try:
+            meta['SOLAR_ELEVATION'] = float(norm['SOLAR_ELEVATION'])
+        except Exception:
+            pass
+    else:
+        try:
+            df             = bandset.metadata
+            meta['SOL']    = int(df['SOL'].iloc[0])
+            meta['SEQ_ID'] = str(df['SEQ_ID'].iloc[0]).strip()
+            meta['RSM']    = int(df['RSM'].min())
+        except Exception:
+            pass
+
+    return meta
+
+
 def _pcam_calibration(label) -> tuple:
     """Return (scale, offset) from a raw pdr label, handling PDS3 and PDS4."""
     norm = _normalise_pcam_label(label)
