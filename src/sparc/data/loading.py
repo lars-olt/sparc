@@ -486,7 +486,6 @@ def observation_metadata(load_result: dict) -> dict:
     """Flatten per-observation metadata from a load_result for export headers.
 
     Returns the full composite key plus localization and photometric context.
-    Fields that can't be derived are omitted - consumers should use .get().
 
     PCAM: SOL, SEQ_ID, SEQ_VER, PMA, SITE, DRIVE, SOLAR_ELEVATION.
     ZCAM: SOL, SEQ_ID, RSM.
