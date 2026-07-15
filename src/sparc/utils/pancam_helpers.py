@@ -40,16 +40,16 @@ def observation_name_suffix(name) -> str:
 
 
 @cache
-def _observation_cluster_map() -> dict[str, tuple[int, str]]:
-    """Return known Pancam filenames mapped to cluster IDs and observation names."""
+def _observation_cluster_map() -> dict[str, tuple[int, str, str]]:
+    """Return known Pancam filenames mapped to cluster, observation, and rover."""
     resource = resources.files("sparc").joinpath(
         "resources/pcam_observation_clusters.csv.gz"
     )
     with resource.open("rb") as raw:
         with gzip.open(raw, "rt", encoding="utf-8", newline="") as stream:
             return {
-                filename: (int(cluster_id), observation_name)
-                for filename, cluster_id, observation_name in csv.reader(stream)
+                filename: (int(cluster_id), observation_name, rover)
+                for filename, cluster_id, observation_name, rover in csv.reader(stream)
             }
 
 
@@ -109,7 +109,7 @@ def split_pcam_observations(products: pd.DataFrame) -> list:
     newer and partial datasets remain usable.
 
     Returns a list of DataFrames, one per pointing, with products sorted by SCLK.
-    Table-backed groups include an 'OBSERVATION_NAME' column.
+    Table-backed groups include 'OBSERVATION_NAME' and 'ROVER_NAME' columns.
     """
     products = products.sort_values('SCLK')
     assignments = products['PATH'].map(
@@ -119,6 +119,7 @@ def split_pcam_observations(products: pd.DataFrame) -> list:
         clustered = products.assign(
             _OBSERVATION_CLUSTER=assignments.map(lambda value: value[0]),
             OBSERVATION_NAME=assignments.map(lambda value: value[1]),
+            ROVER_NAME=assignments.map(lambda value: value[2]),
         )
         return [
             group.drop(columns='_OBSERVATION_CLUSTER').reset_index(drop=True)

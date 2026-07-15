@@ -471,7 +471,7 @@ def observation_metadata(load_result: dict) -> dict:
     Returns the full composite key plus localization and photometric context.
     Fields that cannot be derived are omitted.
 
-    PCAM: SOL, SEQ_ID, SEQ_VER, PMA, SITE, DRIVE, SOLAR_ELEVATION.
+    PCAM: ROVER, SOL, SEQ_ID, SEQ_VER, PMA, SITE, DRIVE, SOLAR_ELEVATION.
     ZCAM: SOL, SEQ_ID, RSM.
     """
     instrument = load_result.get('instrument', 'ZCAM')
@@ -484,6 +484,10 @@ def observation_metadata(load_result: dict) -> dict:
 
     if instrument == 'PCAM':
         norm = getattr(bandset, '_sparc_label', None) or {}
+        try:
+            meta['ROVER'] = str(bandset.metadata['ROVER_NAME'].iloc[0]).strip()
+        except Exception:
+            pass
         try:
             meta['SOL'] = int(norm['PLANET_DAY_NUMBER'])
         except Exception:
