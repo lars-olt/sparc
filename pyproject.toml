@@ -70,7 +70,7 @@ dev = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-sparc = ["resources/*.sel"]
+sparc = ["resources/*.sel", "resources/*.csv.gz"]
 
 [tool.uv]
 # Ensure the lockfile covers all supported platforms so it works on both

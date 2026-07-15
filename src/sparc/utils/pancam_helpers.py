@@ -1,8 +1,11 @@
 """Pancam data scanning and bandset construction."""
 
+import csv
+import gzip
 import os
 import re
 from functools import cache, partial
+from importlib import resources
 from pathlib import Path
 
 import numpy as np
@@ -26,6 +29,28 @@ _PCAM_FILENAME_RE = re.compile(
 )
 
 _INVALID_FILTERS = frozenset({'L0', 'L1', 'L8', 'R8'})
+
+
+def observation_name_suffix(name) -> str:
+    """Return an underscore-prefixed observation name safe for filenames."""
+    if not isinstance(name, str):
+        return ""
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", name.strip()).strip("._-")
+    return f"_{cleaned}" if cleaned else ""
+
+
+@cache
+def _observation_cluster_map() -> dict[str, tuple[int, str]]:
+    """Return known Pancam filenames mapped to cluster IDs and observation names."""
+    resource = resources.files("sparc").joinpath(
+        "resources/pcam_observation_clusters.csv.gz"
+    )
+    with resource.open("rb") as raw:
+        with gzip.open(raw, "rt", encoding="utf-8", newline="") as stream:
+            return {
+                filename: (int(cluster_id), observation_name)
+                for filename, cluster_id, observation_name in csv.reader(stream)
+            }
 
 
 def parse_pcam_fn(filepath):
@@ -79,18 +104,32 @@ def split_pcam_observations(products: pd.DataFrame) -> list:
     """
     Split a SCLK-sorted Pancam DataFrame into per-pointing sub-observations.
 
-    Within a single SEQ_ID, a mosaic acquires the full filter set multiple times.
-    Each time a filter name repeats, a new pointing started. Splitting on that
-    boundary mirrors how ZCAM uses consecutive RSM pairs to separate pointings.
+    Known archive products use the packaged observation table. If any filename
+    is absent from that table, repeated filter names define the boundaries so
+    newer and partial datasets remain usable.
 
-    Returns a list of DataFrames, one per pointing, each containing one full
-    filter set sorted by SCLK.
+    Returns a list of DataFrames, one per pointing, with products sorted by SCLK.
+    Table-backed groups include an 'OBSERVATION_NAME' column.
     """
+    products = products.sort_values('SCLK')
+    assignments = products['PATH'].map(
+        lambda path: _observation_cluster_map().get(Path(path).name.lower())
+    )
+    if assignments.notna().all():
+        clustered = products.assign(
+            _OBSERVATION_CLUSTER=assignments.map(lambda value: value[0]),
+            OBSERVATION_NAME=assignments.map(lambda value: value[1]),
+        )
+        return [
+            group.drop(columns='_OBSERVATION_CLUSTER').reset_index(drop=True)
+            for _, group in clustered.groupby('_OBSERVATION_CLUSTER', sort=False)
+        ]
+
     groups     = []
     current    = []
     seen       = set()
 
-    for _, row in products.sort_values('SCLK').iterrows():
+    for _, row in products.iterrows():
         filt = row['FILTER']
         if filt in seen:
             if current:

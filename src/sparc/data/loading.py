@@ -528,7 +528,7 @@ def _pcam_calibration(label) -> tuple:
 
 def _load_pcam_cube(iof_path, seq_id, obs_ix, rgb_bands):
     import pdr
-    from ..utils.pancam_helpers import get_pcam_bandset
+    from ..utils.pancam_helpers import get_pcam_bandset, observation_name_suffix
 
     # load=False - we read every band ourselves via pdr below, so marslab never
     # touches the image data directly. This avoids breakage on files whose pdr
@@ -643,6 +643,11 @@ def _load_pcam_cube(iof_path, seq_id, obs_ix, rgb_bands):
 
     bandset._sparc_wavelengths = merged_wavelengths
 
+    observation_name = (
+        bandset.metadata['OBSERVATION_NAME'].iloc[0]
+        if 'OBSERVATION_NAME' in bandset.metadata.columns
+        else None
+    )
     try:
         sol      = int(first_label['PLANET_DAY_NUMBER'])
         seq      = pcam_seq_token(first_label)
@@ -650,6 +655,7 @@ def _load_pcam_cube(iof_path, seq_id, obs_ix, rgb_bands):
         scene_id = f"Sol{sol:04d}_{seq}_PMA{pma}"
     except Exception:
         scene_id = bandset.metadata['SEQ_ID'].iloc[0] if 'SEQ_ID' in bandset.metadata.columns else "PCAM_scene"
+    scene_id += observation_name_suffix(observation_name)
 
     return {
         "cube":               np.array(merged_arrays) if merged_arrays else np.empty((0, *shape), dtype=np.float32),
