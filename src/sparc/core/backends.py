@@ -50,21 +50,7 @@ def dispatch_roi_extraction(segmented_img: np.ndarray,
                            allowed_variance: float,
                            backend: ROIBackend,
                            **kwargs) -> np.ndarray:
-    """
-    Dispatch ROI extraction to unified interface.
-    
-    Args:
-        segmented_img: Segmented image
-        masked_cube: Masked hyperspectral cube
-        edge_offset: Edge offset
-        allowed_variance: Allowed variance
-        backend: Backend to use
-        **kwargs: Additional backend-specific arguments
-                 (including min_cluster_area, min_clean_area, etc.)
-        
-    Returns:
-        Array of ROI coordinates
-    """
+    """Run ROI extraction with the selected sequential or threaded backend."""
     from ..roi.extraction import extract_rois
     
     use_threading = backend == ROIBackend.THREADED

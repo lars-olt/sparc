@@ -1,4 +1,4 @@
-"""Simple OO shell for SPARC pipeline - delegates all work to pure functions."""
+"""Object-oriented interface to the SPARC pipeline."""
 
 from typing import Optional
 import matplotlib.pyplot as plt
@@ -30,12 +30,7 @@ logger = setup_logger(__name__)
 
 
 class Sparc:
-    """
-    Simple OO interface for SPARC pipeline.
-    
-    This class stores configuration and state, and delegates all processing
-    to pure functions. It provides a clean, readable interface for interactive use.
-    """
+    """Stateful interface for configuring and running SPARC pipeline steps."""
     
     def __init__(self,
                  sam_model_path: str,
@@ -43,16 +38,7 @@ class Sparc:
                  use_threading: bool = False,
                  n_threads: Optional[int] = None,
                  verbose: bool = False):
-        """
-        Initialize SPARC with model path and performance options.
-        
-        Args:
-            sam_model_path: Path to SAM model weights
-            use_gpu: Enable GPU acceleration for segmentation
-            use_threading: Enable threaded ROI extraction
-            n_threads: Number of threads (None = auto-detect)
-            verbose: Enable verbose logging (DEBUG level)
-        """
+        """Initialize model, execution, and logging settings."""
         # Configure logging verbosity
         configure_logging(verbose)
         
@@ -152,13 +138,8 @@ class Sparc:
         return self
     
     def analyze(self,
-                contamination: float = 0.1,
-                freq_threshold: float = 0.7,
                 max_components: Optional[int] = None) -> 'Sparc':
-        """Analyze spectra for outliers and clustering."""
-        self.config.spectral.contamination = contamination
-        self.config.spectral.freq_threshold = freq_threshold
-        
+        """Cluster ROI spectra."""
         if max_components is not None:
             self.config.spectral.max_components = max_components
         
@@ -175,9 +156,9 @@ class Sparc:
                 iof_path: str,
                 seq_id: Optional[str] = None,
                 obs_ix: int = 0) -> 'Sparc':
-        """Run complete pipeline with defaults."""
+        """Run every pipeline stage with default settings."""
         return (self
-                .load(iof_path, seq_id, obs_ix)
+                .load(iof_path=iof_path, seq_id=seq_id, obs_ix=obs_ix)
                 .preprocess()
                 .segment()
                 .extract_rois()
@@ -206,7 +187,7 @@ class Sparc:
         return fig
     
     def get_result(self) -> SparcResult:
-        """Get immutable result object."""
+        """Return the completed immutable result."""
         if self._result is None:
             if self.state.final_rois is None:
                 raise ValueError("Pipeline not complete. Run all steps first.")
@@ -216,5 +197,5 @@ class Sparc:
     
     @property
     def result(self) -> SparcResult:
-        """Convenience property to get result."""
+        """Return the completed immutable result."""
         return self.get_result()

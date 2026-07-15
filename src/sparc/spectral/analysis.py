@@ -4,59 +4,7 @@ import numpy as np
 from typing import Dict, Any, Tuple
 from sklearn.preprocessing import StandardScaler
 from sklearn.mixture import BayesianGaussianMixture
-from scipy.fft import fft, fftfreq
 from kneed import KneeLocator
-
-
-def detect_outlier_spectra(spectra: np.ndarray,
-                          contamination: float = 0.1,
-                          freq_threshold: float = 0.7) -> np.ndarray:
-    """
-    Returns all spectra as inliers.
-    """
-    # TODO: possibly implement some unique spectra detection logic here.
-    return np.ones(len(spectra), dtype=bool)
-
-
-def compute_high_frequency_ratios(spectra: np.ndarray,
-                                  freq_threshold: float) -> np.ndarray:
-    """
-    Compute high-frequency to low-frequency power ratios.
-    
-    Args:
-        spectra: Array of spectra
-        freq_threshold: Percentile threshold for frequency separation
-        
-    Returns:
-        Array of high-frequency ratios
-    """
-    n_spectra = len(spectra)
-    ratios = np.zeros(n_spectra)
-    
-    for i, spectrum in enumerate(spectra):
-        centered_spectrum = spectrum - np.mean(spectrum)
-        
-        fft_result = fft(centered_spectrum)
-        frequencies = fftfreq(len(centered_spectrum))
-        power_spectrum = np.abs(fft_result) ** 2
-        
-        positive_freq_mask = frequencies > 0
-        positive_freqs = frequencies[positive_freq_mask]
-        positive_power = power_spectrum[positive_freq_mask]
-        
-        if len(positive_power) == 0:
-            continue
-        
-        hf_threshold = np.percentile(positive_freqs, freq_threshold * 100)
-        hf_mask = positive_freqs >= hf_threshold
-        lf_mask = positive_freqs < hf_threshold
-        
-        hf_power = np.sum(positive_power[hf_mask]) if np.any(hf_mask) else 0
-        lf_power = np.sum(positive_power[lf_mask]) if np.any(lf_mask) else 1
-        
-        ratios[i] = hf_power / (lf_power + 1e-10)
-    
-    return ratios
 
 
 def cluster_with_bayesian_gmm(data: np.ndarray,
@@ -97,7 +45,7 @@ def fit_bayesian_gmm(data: np.ndarray,
     try:
         labels = bgmm.fit_predict(data)
     except ValueError:
-        # fall back to diagonal covariance which needs far fewer samples per component
+        # Fall back to diagonal covariance for small sample counts.
         bgmm = BayesianGaussianMixture(
             n_components=max_components,
             covariance_type='diag',

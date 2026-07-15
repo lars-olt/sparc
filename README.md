@@ -60,7 +60,7 @@ sparc = Sparc(
         min_cluster_area=500,
         min_clean_area=4000
     )
-    .analyze(contamination=0.1)
+    .analyze(max_components=9)
     .select()
 )
 
@@ -103,5 +103,4 @@ Key tuning parameters:
 - `allowed_variance` (default: `1.0`) - threshold for splitting a SAM segment into multiple spectral subclusters. Lower values produce finer splits.
 - `edge_offset` (default: `10`) - pixels ignored around the image border to avoid edge artifacts.
 - `max_subclusters` (default: `10`) - hard limit on subclusters per segment to prevent fragmentation.
-- `contamination` (default: `0.1`) - expected fraction of outlier spectra passed to the anomaly detector.
 - `max_components` (default: `9`) - maximum number of spectral clusters the Bayesian GMM may find.

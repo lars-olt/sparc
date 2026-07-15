@@ -145,10 +145,7 @@ def create_single_cluster_result(mask: np.ndarray) -> Tuple:
 def find_optimal_clusters(masked_img: np.ma.MaskedArray,
                            max_clusters: int,
                            allowed_variance: float) -> Tuple:
-    """
-    Increment k until variance exceeds the threshold or we hit max_clusters.
-    Always returns a valid result - k=1 is the floor.
-    """
+    """Increase cluster count while classification variance remains below the limit."""
     from ..utils.array_ops import apply_kmeans_to_masked
 
     best = apply_kmeans_to_masked(masked_img, 1)

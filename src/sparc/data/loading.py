@@ -57,12 +57,7 @@ ZCAM_CROP = rapidlooks.CROP_SETTINGS["crop"]
 
 
 def _fwd(path) -> str:
-    """Normalize and forward-slash a path string.
-
-    os.path.normpath resolves virtual filesystem paths (e.g. Dropbox on macOS)
-    that QFileDialog returns but low-level file scanners can't traverse directly.
-    The replace converts backslashes for asdf's Windows stem-parsing.
-    """
+    """Normalize a path and use forward slashes for ASDF stem parsing."""
     import os
     return os.path.normpath(os.path.expanduser(str(path))).replace('\\', '/')
 
@@ -139,12 +134,9 @@ def load_cube(
 
 
 def _rgb_from_keys(keys, bands, shape, stretch_fn):
-    """Build an RGB display image from preferred band keys.
+    """Build RGB from preferred bands, falling back to available camera bands.
 
-    If all three preferred bands are present, uses stretch_fn. If not,
-    falls back to the three lowest-index available bands for that camera.
-    Returns (image, bands_available) where bands_available signals whether
-    the preferred set was used - False means stretch overlays should be disabled.
+    Return the image and whether every preferred band was available.
     """
     prefix   = keys[0][0]  # 'L' or 'R'
     present  = [k for k in keys if k in bands]
@@ -195,7 +187,7 @@ def _load_zcam_cube(
         for b in sorted(bandset.metadata["FILTER"].unique()):
             try:
                 pixmaps[b] = crop(bandset.pixmaps[b], ZCAM_CROP).copy()
-            except (KeyError, Exception):
+            except KeyError:
                 pass
         bands = apply_pixel_masks(base_bands, pixmaps)
     else:
@@ -214,8 +206,12 @@ def _load_zcam_cube(
     left_raw  = np.array([base_bands[b] for b in left_band_keys])
     right_raw = np.array([base_bands[b] for b in right_band_keys])
 
-    left_rgb_img,  left_stretch  = _rgb_from_keys(('L2', 'L5', 'L7'), bands, shape, _pcam_rgb)
-    right_rgb_img, right_stretch = _rgb_from_keys(('R2', 'R1', 'R1'), bands, shape, _pcam_rgb)
+    left_rgb_img, left_stretch = _rgb_from_keys(
+        ('L2', 'L5', 'L7'), bands, shape, _pcam_rgb
+    )
+    right_rgb_img, right_stretch = _rgb_from_keys(
+        ('R2', 'R1', 'R1'), bands, shape, _pcam_rgb
+    )
 
     # homography requires both shared bands - fall back to identity if either is missing
     l_shared = SHARED_BANDS["L"]
@@ -386,14 +382,7 @@ def _pds4_metaget(label, *path):
 
 
 def _normalise_pcam_label(label) -> dict:
-    """Return a flat dict with the fields downstream code needs, regardless of PDS3/PDS4 format.
-
-    Fields produced:
-      PLANET_DAY_NUMBER, SEQUENCE_ID, ROVER_MOTION_COUNTER (list),
-      SOLAR_ELEVATION, DERIVED_IMAGE_PARMS (dict with RADIANCE_SCALING_FACTOR / RADIANCE_OFFSET).
-
-    Any field that can't be extracted is omitted - callers should use .get().
-    """
+    """Normalize the PDS3/PDS4 Pancam fields used downstream."""
     if not _is_pds4(label):
         # PDS3 - pdr.Metadata behaves like a dict; just mirror the fields we need.
         out = {}
@@ -471,12 +460,7 @@ def _normalise_pcam_label(label) -> dict:
 
 
 def pcam_seq_token(norm: dict) -> str:
-    """Fold sequence version onto the sequence id, e.g. 'p2530' + '1' -> 'p2530v1'.
-
-    seq_ver only means anything paired with its sequence, so it rides along in the
-    same token that identifies a pointing. Drops the suffix if the version is absent
-    so PDS3 files with no version still get a usable id.
-    """
+    """Return a sequence ID with its optional version suffix, such as 'p2530v1'."""
     seq = str(norm.get('SEQUENCE_ID', '')).strip()
     ver = str(norm.get('SEQUENCE_VERSION_ID', '')).strip()
     return f"{seq}v{ver}" if ver else seq
@@ -486,6 +470,7 @@ def observation_metadata(load_result: dict) -> dict:
     """Flatten per-observation metadata from a load_result for export headers.
 
     Returns the full composite key plus localization and photometric context.
+    Fields that cannot be derived are omitted.
 
     PCAM: SOL, SEQ_ID, SEQ_VER, PMA, SITE, DRIVE, SOLAR_ELEVATION.
     ZCAM: SOL, SEQ_ID, RSM.
@@ -577,31 +562,46 @@ def _load_pcam_cube(iof_path, seq_id, obs_ix, rgb_bands):
     if not bands:
         raise ValueError(f"No usable bands loaded from {iof_path}")
 
-    # Keep only bands at the largest frame size - smaller ones are thumbnails or subframes.
-    all_shapes  = [bands[b].shape for b in bands]
-    modal_shape = max(set(all_shapes), key=all_shapes.count)
-    bands       = {b: a for b, a in bands.items() if a.shape == modal_shape}
+    # Keep the largest frame size for each camera independently. Smaller frames
+    # are thumbnails or downsampled products.
+    def _keep_largest(prefix):
+        cam = {b: a for b, a in bands.items() if b.startswith(prefix)}
+        if not cam:
+            return {}
+        target  = max({a.shape for a in cam.values()}, key=lambda s: s[0] * s[1])
+        dropped = sorted(b for b, a in cam.items() if a.shape != target)
+        if dropped:
+            print(f"PCAM load: dropping {', '.join(dropped)} - smaller than the {target} science frame")
+        return {b: a for b, a in cam.items() if a.shape == target}
 
-    shape = modal_shape
+    left_cam  = _keep_largest("L")
+    right_cam = _keep_largest("R")
+    bands     = {**left_cam, **right_cam}
 
-    left_band_keys  = sorted(b for b in bands if b.startswith("L"))
-    right_band_keys = sorted(b for b in bands if b.startswith("R"))
+    left_shape  = next(iter(left_cam.values())).shape  if left_cam  else None
+    right_shape = next(iter(right_cam.values())).shape if right_cam else None
+
+    # Use the right-camera frame as the warp destination when it is available.
+    shape = right_shape or left_shape
+
+    left_band_keys  = sorted(left_cam)
+    right_band_keys = sorted(right_cam)
 
     left_cube  = np.array([bands[b] for b in left_band_keys])  if left_band_keys  else np.empty((0, *shape), dtype=np.float32)
     right_cube = np.array([bands[b] for b in right_band_keys]) if right_band_keys else np.empty((0, *shape), dtype=np.float32)
     left_safe  = np.where(np.isfinite(left_cube),  left_cube,  0.0)
     right_safe = np.where(np.isfinite(right_cube), right_cube, 0.0)
 
-    left_rgb_img,  left_stretch  = _rgb_from_keys(_PCAM_LEFT_RGB, bands, shape, _pcam_rgb)
-    right_rgb_img, right_stretch = _rgb_from_keys(_PCAM_RIGHT_RGB, bands, shape, _pcam_rgb)
+    left_rgb_img,  left_stretch  = _rgb_from_keys(_PCAM_LEFT_RGB,  bands, left_shape  or shape, _pcam_rgb)
+    right_rgb_img, right_stretch = _rgb_from_keys(_PCAM_RIGHT_RGB, bands, right_shape or shape, _pcam_rgb)
 
-    def _gray_for_homography(keys):
+    def _gray_for_homography(keys, cam_shape):
         available = [bands[k] for k in keys if k in bands]
-        r, g, b   = (available + [np.zeros(shape, np.float32)] * 3)[:3]
+        r, g, b   = (available + [np.zeros(cam_shape, np.float32)] * 3)[:3]
         return cv2.cvtColor(dcs_rgb(r, g, b), cv2.COLOR_RGB2GRAY).astype(np.float32)
 
-    left_gray  = _gray_for_homography(_PCAM_LEFT_RGB)
-    right_gray = _gray_for_homography(('R3', 'R5', 'R7'))
+    left_gray  = _gray_for_homography(_PCAM_LEFT_RGB, left_shape or shape)
+    right_gray = _gray_for_homography(('R3', 'R5', 'R7'), right_shape or shape)
 
     homography_matrix = compute_homography(left_gray, right_gray)
     left_cube_aligned = apply_homography(left_safe, homography_matrix, shape) if left_safe.size else left_safe
@@ -706,14 +706,9 @@ def _prepare(img):
 
 
 def compute_homography(source, destination, prestretch=1):
-    """Compute a (3, 3) warp matrix from source to destination via SIFT feature matching.
+    """Estimate a deterministic 3x3 source-to-destination warp from SIFT matches.
 
-    Both images are converted to CLAHE-normalized grayscale before descriptor
-    extraction, removing tonal differences between cameras that would otherwise
-    corrupt matches. Tries an affine model first (more constrained, better for
-    wide-baseline stereo), falling back to a full homography if the affine inlier
-    count is too low. Always returns a (3, 3) matrix so cv2.invert and
-    warpPerspective work unchanged.
+    Try an affine transform first, then a full homography when support is low.
     """
     sift = cv2.SIFT_create()
     src_kp, src_desc = sift.detectAndCompute(_prepare(source),      None)
@@ -722,10 +717,11 @@ def compute_homography(source, destination, prestretch=1):
     if src_desc is None or dst_desc is None:
         return np.eye(3, dtype=np.float64)
 
-    # kNN with k=2 enables the ratio test, which is more robust than crossCheck
+    # Use two nearest neighbors for the descriptor ratio test.
     matcher = cv2.BFMatcher(cv2.NORM_L2)
     knn     = matcher.knnMatch(src_desc, dst_desc, k=2)
-    good    = [m for m, n in knn if m.distance < _RATIO_THRESH * n.distance]
+    good    = [pair[0] for pair in knn
+               if len(pair) == 2 and pair[0].distance < _RATIO_THRESH * pair[1].distance]
 
     if len(good) < 4:
         return np.eye(3, dtype=np.float64)
@@ -733,16 +729,13 @@ def compute_homography(source, destination, prestretch=1):
     src_pts = np.float32([src_kp[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
     dst_pts = np.float32([dst_kp[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
 
-    # Sort matches by (source x, y) so the point ordering fed to RANSAC is
-    # independent of match-iteration order, which can vary across OpenCV builds.
+    # Sort matches by source coordinates for deterministic RANSAC input.
     order   = np.lexsort((src_pts[:, 0, 1], src_pts[:, 0, 0]))
     src_pts = src_pts[order]
     dst_pts = dst_pts[order]
 
-    # affine first - 6 DOF is less likely to overfit noise on a wide-baseline pair.
-    # Seed OpenCV's RNG and pin the iteration count so RANSAC is reproducible -
-    # otherwise the same scene warps slightly differently run to run and machine
-    # to machine, shifting every homography-derived ROI.
+    # Try the six-degree-of-freedom affine model before a full homography.
+    # Fix the RNG seed and iteration count for reproducible RANSAC results.
     cv2.setRNGSeed(_HOMOGRAPHY_SEED)
     affine, inliers = cv2.estimateAffine2D(
         src_pts, dst_pts,
@@ -755,7 +748,7 @@ def compute_homography(source, destination, prestretch=1):
     n_inliers = int(inliers.sum()) if inliers is not None else 0
 
     if affine is not None and n_inliers >= _MIN_AFFINE_INLIERS:
-        # pad to (3, 3) so cv2.invert and warpPerspective work everywhere downstream
+        # Convert the affine matrix to the 3x3 form used downstream.
         return np.vstack([affine, [0.0, 0.0, 1.0]])
 
     # fall back to full homography when affine doesn't have enough support

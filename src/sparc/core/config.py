@@ -77,8 +77,6 @@ class ROIConfig:
 
 @dataclass
 class SpectralConfig:
-    contamination:  float          = 0.1
-    freq_threshold: float          = 0.7
     max_components: int            = 9
     # Restrict GMM clustering to bands within [wavelength_min, wavelength_max] nm.
     # None means no limit on that side - defaults give the full non-Bayer range.

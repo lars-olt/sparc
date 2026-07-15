@@ -44,10 +44,8 @@ _TEMPLATE_NAMES = {
     "pcam": "blank_pcam.sel",
 }
 
-# Pancam scenes come in a few fixed frame sizes. Each needs its own blank, since
-# the template carries the frame's sensor placement (POS blocks) baked in by
-# MERSpect - a full-frame blank would pin a subframe scene to the sensor origin.
-# Keyed by (height, width); falls back to blank_pcam.sel when a size isn't listed.
+# Map Pancam frame sizes to templates containing the corresponding MERSpect POS blocks.
+# Unknown sizes use blank_pcam.sel.
 _PCAM_SIZED_TEMPLATES = {
     (300, 300): "blank_pcam_300x300.sel",
 }
@@ -199,8 +197,7 @@ def get_default_template_path(instrument: Optional[str] = None,
         if p.is_file():
             return p
 
-    # A missing sized template falls back to the instrument default rather than
-    # failing outright - the frame placement will be wrong, but export still works.
+    # Fall back to the instrument template when no size-specific template exists.
     if name != _TEMPLATE_NAMES[inst_key]:
         return get_default_template_path(instrument=inst_key)
 

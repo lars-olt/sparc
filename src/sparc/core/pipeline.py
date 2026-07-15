@@ -14,7 +14,7 @@ from ..data.loading import load_cube
 from ..preprocessing.masking import apply_masking
 from ..preprocessing.calibration import apply_photometric_calibration
 from ..roi.filtering import filter_by_area, filter_by_albedo_ratio, select_representative_rois
-from ..spectral.analysis import detect_outlier_spectra, cluster_with_bayesian_gmm
+from ..spectral.analysis import cluster_with_bayesian_gmm
 from ..spectral.metrics import compute_roi_spectra
 from ..utils.geometry import convert_to_plot_coords
 
@@ -166,7 +166,7 @@ def spectral_step(state: SparcState, config: SparcConfig) -> SparcState:
     if state.roi_spectra is None:
         raise ValueError("No ROI spectra. Run roi_step first.")
 
-    logger.info("Spectral analysis - outlier detection and clustering")
+    logger.info("Spectral clustering")
 
     instrument = (state.instrument_config or {}).get('instrument', 'ZCAM')
 
@@ -222,29 +222,11 @@ def spectral_step(state: SparcState, config: SparcConfig) -> SparcState:
             f"({kept.min():.0f}–{kept.max():.0f} nm)"
         )
 
-    state.outlier_mask = detect_outlier_spectra(
-        clustering_spectra,
-        config.spectral.contamination,
-        config.spectral.freq_threshold,
-    )
-
-    n_outliers = np.count_nonzero(state.outlier_mask)
-    logger.info(f"Detected {n_outliers} spectrally unique ROIs")
-
-    if n_outliers > 3:
-        spectra_to_cluster = clustering_spectra[state.outlier_mask]
-    else:
-        spectra_to_cluster = clustering_spectra
-        state.outlier_mask = np.ones(len(clustering_spectra), dtype=bool)
-        logger.debug("Too few outliers - clustering full dataset")
-
-    max_components = min(config.spectral.max_components, len(spectra_to_cluster))
-    # require at least 2 samples per component - BayesianGMM with covariance_type='full'
-    # needs enough samples to estimate each covariance matrix, and n_samples == n_components
-    # always produces degenerate (singleton) clusters that sklearn rejects.
-    max_components = max(1, min(max_components, len(spectra_to_cluster) // 2))
+    max_components = min(config.spectral.max_components, len(clustering_spectra))
+    # Require at least two samples per full-covariance GMM component.
+    max_components = max(1, min(max_components, len(clustering_spectra) // 2))
     state.clustering_result, state.all_clustering_results = cluster_with_bayesian_gmm(
-        spectra_to_cluster, max_components
+        clustering_spectra, max_components
     )
 
     logger.info(f"Found {state.clustering_result['n_components']} spectral clusters")
@@ -263,14 +245,9 @@ def selection_step(state: SparcState, config: SparcConfig) -> SparcState:
 
     albedo_filtered_rois = state.area_filtered_rois[state.albedo_valid_indices]
 
-    if len(state.roi_spectra[state.outlier_mask]) > 3:
-        selected_rois    = albedo_filtered_rois[state.outlier_mask]
-        selected_stds    = state.roi_stds[state.outlier_mask]
-        selected_spectra = state.roi_spectra[state.outlier_mask]
-    else:
-        selected_rois    = albedo_filtered_rois
-        selected_stds    = state.roi_stds
-        selected_spectra = state.roi_spectra
+    selected_rois    = albedo_filtered_rois
+    selected_stds    = state.roi_stds
+    selected_spectra = state.roi_spectra
 
     state.roi_indices   = select_representative_rois(
         selected_rois, selected_stds, state.clustering_result['labels']

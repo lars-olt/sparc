@@ -44,13 +44,7 @@ def run_sparc(iof_path: str,
 def run_sparc_from_load_result(load_result: Dict[str, Any],
                                config: SparcConfig,
                                presegmented: Optional[np.ndarray] = None) -> SparcResult:
-    """
-    Run SPARC starting from an already-loaded scene, skipping load_step.
-    Used by the GUI to avoid paying the IO cost twice.
-
-    If presegmented is provided (a 2D int32 segment label array), the segment_step
-    is skipped and those labels are used directly.
-    """
+    """Run SPARC from loaded scene data, optionally using existing segment labels."""
     config.validate()
 
     instrument        = load_result.get('instrument', 'ZCAM')
@@ -80,7 +74,7 @@ def run_sparc_from_load_result(load_result: Dict[str, Any],
 
 
 def run_sparc_steps(config: SparcConfig) -> SparcState:
-    """Run the full pipeline and return the raw state - useful for debugging."""
+    """Run the full pipeline and return its mutable state."""
     config.validate()
     state = SparcState()
     state = load_step(state, config)

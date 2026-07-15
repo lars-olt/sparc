@@ -11,12 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 # --- Configuration & Environment ---
 
 def configure_worker_env(n_threads: int = 1) -> None:
-    """
-    Set environment variables to restrict BLAS/MKL threads in workers.
-    
-    This is crucial when running many KMeans instances in parallel to avoid
-    oversubscription of CPU cores.
-    """
+    """Limit native numerical-library threads within each worker."""
     os.environ["OMP_NUM_THREADS"] = str(n_threads)
     os.environ["MKL_NUM_THREADS"] = str(n_threads)
     os.environ["OPENBLAS_NUM_THREADS"] = str(n_threads)
@@ -24,12 +19,7 @@ def configure_worker_env(n_threads: int = 1) -> None:
     os.environ["NUMEXPR_NUM_THREADS"] = str(n_threads)
 
 def configure_global_settings():
-    """
-    Apply global settings for the SPARC pipeline.
-    
-    Configures threading environment variables for Windows/MKL.
-    Suppresses known KMeans memory leak warnings.
-    """
+    """Configure Windows worker limits and known scikit-learn warnings."""
     if platform.system() == "Windows":
         configure_worker_env(1)
 
@@ -61,18 +51,7 @@ def run_parallel(
     n_jobs: Optional[int] = None,
     backend: str = "thread",
 ) -> List[Any]:
-    """
-    Execute a function in parallel over a list of items.
-    
-    Args:
-        func: Function to apply to each item
-        items: List of items to process
-        n_jobs: Number of workers (None = auto-detect)
-        backend: 'thread' for ThreadPoolExecutor or 'process' for ProcessPoolExecutor
-        
-    Returns:
-        List of results
-    """
+    """Map a function over items with a thread or process executor."""
     # Auto-detect CPUs if not provided
     if n_jobs is None:
         n_jobs = max(1, psutil.cpu_count(logical=False) or 1)
@@ -91,23 +70,11 @@ def run_parallel(
 # --- Safe Classes ---
 
 class SafeKMeans:
-    """
-    Wrapper for sklearn KMeans with proper warning suppression.
-    
-    This wrapper handles the Windows MKL memory leak warning and ensures
-    consistent behavior across platforms.
-    """
+    """KMeans wrapper that suppresses the known Windows MKL warning."""
     
     @suppress_kmeans_warnings
     def __init__(self, n_clusters: int, random_state: int = 42, **kwargs):
-        """
-        Initialize SafeKMeans wrapper.
-        
-        Args:
-            n_clusters: Number of clusters
-            random_state: Random seed for reproducibility
-            **kwargs: Additional KMeans parameters
-        """
+        """Initialize the wrapped KMeans estimator."""
         from sklearn.cluster import KMeans
         
         # Remove n_jobs if present (deprecated in newer sklearn)

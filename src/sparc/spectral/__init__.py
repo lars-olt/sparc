@@ -1,8 +1,6 @@
-"""SPARC spectral analysis module - Clustering and outlier detection."""
+"""SPARC spectral clustering and metrics."""
 
 from .analysis import (
-    detect_outlier_spectra,
-    compute_high_frequency_ratios,
     cluster_with_bayesian_gmm,
     fit_bayesian_gmm,
     create_sam_features,
@@ -19,8 +17,6 @@ from .metrics import (
 
 __all__ = [
     # Analysis
-    'detect_outlier_spectra',
-    'compute_high_frequency_ratios',
     'cluster_with_bayesian_gmm',
     'fit_bayesian_gmm',
     'create_sam_features',

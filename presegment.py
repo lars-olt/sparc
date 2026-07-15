@@ -1,18 +1,4 @@
-"""
-Pre-segment all scenes in a directory using SAM.
-
-Scans the given folder and one level of subdirectories for ZCAM and Pancam scenes,
-runs SAM segmentation on each, and saves the result as a compressed NPZ file
-alongside the source images. Already-processed scenes are skipped.
-
-Use --dcs to segment from a decorrelation-stretched image; files get a _dcs suffix.
-Only the DCS flag at pre-segmentation time matters for matching - ROIStudio will use
-a pre-segmented file only when the DCS toggle matches the suffix.
-
-Usage:
-    python presegment.py <folder> --sam-path <path> [--dcs]
-    python presegment.py <folder> --sam-path <path> --points-per-side 64 --workers 8
-"""
+"""Pre-segment ZCAM and Pancam scenes with SAM and save compressed label arrays."""
 
 import argparse
 import queue
@@ -318,8 +304,8 @@ def main():
         t.start()
         loaders.append(t)
 
-    # GPU worker runs in the main thread - drains queue and runs SAM sequentially.
-    # Each loader thread posts a sentinel when it finishes; we exit when all are received.
+    # Run SAM sequentially on the main thread while loader threads fill the queue.
+    # Stop after receiving one sentinel from each loader.
     n_loaders  = len(loaders)
     done_count = 0
     attempted  = 0

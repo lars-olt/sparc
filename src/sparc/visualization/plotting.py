@@ -1,4 +1,4 @@
-"""Visualization and plotting functionality."""
+"""Plots for SPARC images, spectra, clustering, and summaries."""
 
 import numpy as np
 import matplotlib.pyplot as plt

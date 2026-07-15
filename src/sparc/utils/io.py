@@ -13,9 +13,7 @@ from ..core.constants import COLOR_NAMES
 
 
 class SparcExporter:
-    """
-    Comprehensive exporter for SPARC results including CSV, plots, and images.
-    """
+    """Export SPARC results as tables, plots, and context images."""
 
     def __init__(self, sparc_instance):
         """
@@ -97,15 +95,8 @@ class SparcExporter:
         # Get final ROI data
         final_rois = self.sparc.final_rois
 
-        # Get corresponding spectra
-        if len(self.sparc.roi_spectra[self.sparc.outlier_mask]) > 3:
-            outlier_spectra = self.sparc.roi_spectra[self.sparc.outlier_mask]
-            outlier_stds = self.sparc.roi_stds[self.sparc.outlier_mask]
-            final_spectra = outlier_spectra[self.sparc.roi_indices]
-            final_stds = outlier_stds[self.sparc.roi_indices]
-        else:
-            final_spectra = self.sparc.roi_spectra[self.sparc.roi_indices]
-            final_stds = self.sparc.roi_stds[self.sparc.roi_indices]
+        final_spectra = self.sparc.roi_spectra[self.sparc.roi_indices]
+        final_stds = self.sparc.roi_stds[self.sparc.roi_indices]
 
         # Create DataFrame
         rows = []
@@ -322,14 +313,8 @@ class SparcExporter:
         output_path = Path(output_path).with_suffix(f".{format}")
 
         # Get final spectra
-        if len(self.sparc.roi_spectra[self.sparc.outlier_mask]) > 3:
-            outlier_spectra = self.sparc.roi_spectra[self.sparc.outlier_mask]
-            outlier_stds = self.sparc.roi_stds[self.sparc.outlier_mask]
-            final_spectra = outlier_spectra[self.sparc.roi_indices]
-            final_stds = outlier_stds[self.sparc.roi_indices]
-        else:
-            final_spectra = self.sparc.roi_spectra[self.sparc.roi_indices]
-            final_stds = self.sparc.roi_stds[self.sparc.roi_indices]
+        final_spectra = self.sparc.roi_spectra[self.sparc.roi_indices]
+        final_stds = self.sparc.roi_stds[self.sparc.roi_indices]
 
         # Create plot
         from ..visualization.plotting import plot_spectra

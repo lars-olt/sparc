@@ -48,7 +48,6 @@ class SparcState:
     albedo_filtered_stds: Optional[np.ndarray] = None
 
     # Spectral analysis stage
-    outlier_mask: Optional[np.ndarray] = None
     clustering_result: Optional[Dict[str, Any]] = None
     all_clustering_results: Optional[Dict[str, Any]] = None
 
