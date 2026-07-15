@@ -223,7 +223,7 @@ def spectral_step(state: SparcState, config: SparcConfig) -> SparcState:
         )
 
     max_components = min(config.spectral.max_components, len(clustering_spectra))
-    # Require at least two samples per full-covariance GMM component.
+    # Keep candidate components at or below half the ROI count.
     max_components = max(1, min(max_components, len(clustering_spectra) // 2))
     state.clustering_result, state.all_clustering_results = cluster_with_bayesian_gmm(
         clustering_spectra, max_components

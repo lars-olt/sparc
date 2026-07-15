@@ -156,7 +156,7 @@ class Sparc:
                 iof_path: str,
                 seq_id: Optional[str] = None,
                 obs_ix: int = 0) -> 'Sparc':
-        """Run every pipeline stage with default settings."""
+        """Run every pipeline stage using the instance's current configuration."""
         return (self
                 .load(iof_path=iof_path, seq_id=seq_id, obs_ix=obs_ix)
                 .preprocess()

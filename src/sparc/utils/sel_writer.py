@@ -348,7 +348,7 @@ def _build_mask(
         x, y, w, h = int(roi[0]), int(roi[1]), int(roi[2]), int(roi[3])
         if w <= 0 or h <= 0:
             continue
-        # Flip vertically to match merspect origin (y=0 at top of image).
+        # Convert top-origin image coordinates to the mask's bottom-origin row order.
         x0, x1 = max(0, x), min(W, x + w)
         y0, y1 = max(0, H - y - h), min(H, H - y)
         if x1 > x0 and y1 > y0:

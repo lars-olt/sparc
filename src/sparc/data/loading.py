@@ -66,9 +66,8 @@ def _scan_and_split(iof_path, seq_id=None):
     """
     Scan a folder and split files into per-pointing groups using RSM.
 
-    Each pointing consists of a left/right camera pair with consecutive RSM
-    values (e.g. 460/462). Sorting unique RSMs and chunking into pairs of two
-    correctly groups all pointings regardless of scene count.
+    Treats each consecutive pair in the sorted unique RSM values as one
+    pointing.
 
     Returns a list of DataFrames, one per pointing, each containing all filters
     for that pointing.
