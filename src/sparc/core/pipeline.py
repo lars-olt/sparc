@@ -38,7 +38,7 @@ def load_step(state: SparcState, config: SparcConfig) -> SparcState:
 
     state.instrument_config['wavelengths'] = load_result['bandset']._sparc_wavelengths
     state.load_result   = load_result
-    state.using_pixmaps = config.load.do_apply_pixmaps
+    state.using_pixmaps = load_result['using_pixmaps']
 
     logger.info(f"Loaded scene: {load_result['id']}")
     logger.debug(f"Load took {time.time() - t0:.2f}s | cube shape: {load_result['cube'].shape}")

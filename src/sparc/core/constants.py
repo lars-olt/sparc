@@ -19,7 +19,7 @@ COLOR_NAMES    = list(COLOR_MAPPINGS.keys())
 COLORS         = list(COLOR_MAPPINGS.values())
 
 SHARED_BANDS = {"L": "L1", "R": "R1"}
-BAD_PIXEL_FLAGS = ('bad', 'no_signal', 'hot')
+BAD_PIXEL_FLAGS = ('bad', 'no_signal', 'saturated', 'hot')
 
 DEFAULT_ROI_AREA_THRESHOLD    = 50
 DEFAULT_EDGE_OFFSET           = 10

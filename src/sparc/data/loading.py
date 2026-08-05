@@ -45,6 +45,7 @@ class LoadResult(TypedDict):
     right_band_keys:    list
     merged_band_recipe: list
     stretch_bands:      Dict[str, bool]  # per-camera stretch availability
+    using_pixmaps:      bool
 
 
 BAD_PIXEL_VALUES = tuple(
@@ -115,6 +116,22 @@ def _bandset_from_group(group):
     return bs
 
 
+def _load_zcam_pixmaps(bandset) -> dict:
+    """Find and load the available pixel maps for a ZCAM observation."""
+    from asdf.scan import find_obs_metamaps
+
+    paths = tuple(bandset.metadata["PATH"].unique())
+    metamaps, _ = find_obs_metamaps(paths, code="pix_map")
+    metamaps = {path: pixmap for path, pixmap in metamaps.items() if pixmap}
+    if not metamaps:
+        return {}
+
+    associations = {path: metamaps.get(str(path), "") for path in paths}
+    bandset.associate_metamaps(associations, code="pix_map")
+    bandset.load_metamaps(code="pix_map")
+    return bandset.pixmaps
+
+
 def load_cube(
     iof_path: str,
     instrument: str,
@@ -181,14 +198,14 @@ def _load_zcam_cube(
     bandset.bulk_debayer("all")
     base_bands = {b: crop(bandset.get_band(b), ZCAM_CROP).copy() for b in filters}
 
-    if do_apply_pixmaps:
-        pixmaps = {}
-        for b in sorted(bandset.metadata["FILTER"].unique()):
-            try:
-                pixmaps[b] = crop(bandset.pixmaps[b], ZCAM_CROP).copy()
-            except KeyError:
-                pass
-        bands = apply_pixel_masks(base_bands, pixmaps)
+    pixmaps = _load_zcam_pixmaps(bandset) if do_apply_pixmaps else {}
+    using_pixmaps = bool(pixmaps)
+    if using_pixmaps:
+        cropped_pixmaps = {
+            band: crop(pixmap, ZCAM_CROP).copy()
+            for band, pixmap in pixmaps.items()
+        }
+        bands = apply_pixel_masks(base_bands, cropped_pixmaps)
     else:
         bands = base_bands
 
@@ -270,6 +287,7 @@ def _load_zcam_cube(
         "right_band_keys":    right_band_keys,
         "merged_band_recipe": merged_band_recipe,
         "stretch_bands":      {"left": left_stretch, "right": right_stretch},
+        "using_pixmaps":      using_pixmaps,
     }
 
 
@@ -289,10 +307,17 @@ _PCAM_LEFT_RGB  = ('L4', 'L5', 'L6')
 _PCAM_RIGHT_RGB = ('R7', 'R5', 'R3')
 
 
+def _as_nan_array(array):
+    if np.ma.isMaskedArray(array):
+        return array.filled(np.nan)
+    return np.asarray(array)
+
+
 def _pcam_rgb(r_b, g_b, b_b):
     """Per-channel percentile-stretched RGB from IOF bands."""
     channels = []
     for ch in (r_b, g_b, b_b):
+        ch    = _as_nan_array(ch)
         ch    = np.nan_to_num(ch, nan=0.0)
         valid = ch[ch > 0]
         if valid.size > 0:
@@ -311,6 +336,7 @@ def dcs_rgb(r_b, g_b, b_b):
     enhanced spectral contrast for SAM segmentation and SIFT feature matching.
     Works with any three float band arrays (ZCAM or Pancam).
     """
+    r_b, g_b, b_b = map(_as_nan_array, (r_b, g_b, b_b))
     H, W    = r_b.shape
     invalid = ~np.isfinite(r_b) | ~np.isfinite(g_b) | ~np.isfinite(b_b)
     r = np.where(invalid, 0.0, np.nan_to_num(r_b)).astype(np.float32)
@@ -679,6 +705,7 @@ def _load_pcam_cube(iof_path, seq_id, obs_ix, rgb_bands):
         "right_band_keys":    right_band_keys,
         "merged_band_recipe": merged_band_recipe,
         "stretch_bands":      {"left": left_stretch, "right": right_stretch},
+        "using_pixmaps":      False,
     }
 
 
@@ -777,14 +804,18 @@ def create_bad_pixel_mask(pixmaps, camera, shape=None):
 
 
 def apply_pixel_masks(bands, pixmaps):
-    """Replace bad pixels with NaN using per-camera pixmap masks."""
-    shape      = next(iter(bands.values())).shape
-    left_mask  = create_bad_pixel_mask(pixmaps, "L", shape)
-    right_mask = create_bad_pixel_mask(pixmaps, "R", shape)
-    return {
-        b: np.where(left_mask if b.startswith("L") else right_mask, np.nan, a)
-        for b, a in bands.items()
-    }
+    """Replace bad pixels with NaN where a matching pixel map exists."""
+    masked = {}
+    for band, array in bands.items():
+        pixmap = pixmaps.get(band)
+        if pixmap is None and band[:2] in ("L0", "R0"):
+            pixmap = pixmaps.get(band[:2])
+        masked[band] = (
+            array
+            if pixmap is None
+            else np.where(np.isin(pixmap, BAD_PIXEL_VALUES), np.nan, array)
+        )
+    return masked
 
 
 def create_rgb_stretch(cube):

@@ -54,7 +54,7 @@ def run_sparc_from_load_result(load_result: Dict[str, Any],
     state                   = SparcState()
     state.load_result       = load_result
     state.instrument_config = instrument_config
-    state.using_pixmaps     = load_result.get('using_pixmaps', True)
+    state.using_pixmaps     = load_result.get('using_pixmaps', False)
 
     logger.info(f"Resuming SPARC from pre-loaded scene: {load_result['id']}")
     state = preprocess_step(state, config)
