@@ -20,7 +20,7 @@ _PCAM_FILENAME_RE = re.compile(
     r'P'
     r'(?P<SCLK>\d{9})'
     r'(?P<PRODUCT_TYPE>[A-Z]{3})'
-    r'[A-Z0-9]{4}'
+    r'[A-Z0-9_#]{4}'
     r'(?P<SEQ_ID>[A-Z]\d{4})'
     r'(?P<FILTER>[LR]\d)'
     r'(?P<VERSION>[A-Z0-9])'
