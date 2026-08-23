@@ -1,5 +1,7 @@
 # SPARC: Spectral Pattern Analysis for ROI Classification
 
+[![CI/CD](https://github.com/lars-olt/sparc/actions/workflows/ci.yml/badge.svg)](https://github.com/lars-olt/sparc/actions/workflows/ci.yml)
+
 A pipeline for automatically extracting regions of interest from Mars rover hyperspectral images. SPARC combines deep learning segmentation with spectral clustering to identify geologically releant features in MastcamZ data.
 
 ## Architecture
@@ -126,3 +128,19 @@ Key tuning parameters:
 - `edge_offset` (default: `10`) - pixels ignored around the image border to avoid edge artifacts.
 - `max_subclusters` (default: `10`) - hard limit on subclusters per segment to prevent fragmentation.
 - `max_components` (default: `9`) - maximum number of spectral clusters the Bayesian GMM may find.
+
+## Development
+
+The test suite does not require a SAM checkpoint. It exercises loading,
+calibration, spectral metrics, configuration, package boundaries, and test
+fixtures with deterministic data.
+
+```bash
+uv pip install "pytest>=8,<10"
+uv run --no-sync pytest -q
+```
+
+Pull requests and pushes to `main` run the suite on Windows and Apple Silicon.
+Version tags such as `v2.0.0` must match the version in `pyproject.toml`; after
+tests pass, CI builds audited wheel and source distributions and attaches them
+to a GitHub release.
