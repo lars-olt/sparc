@@ -22,9 +22,31 @@ uv venv
 uv sync
 ```
 
+That installs SPARC's lightweight data-loading, ROI, plotting, spectra, and file
+I/O APIs. It deliberately omits the segmentation and spectral-clustering
+runtime. Install the full algorithm stack when you need to run the pipeline:
+
+```bash
+uv sync --extra algorithm
+```
+
+The equivalent dependency forms for downstream applications are:
+
+```bash
+pip install "sparc @ git+ssh://git@github.com/lars-olt/sparc.git"
+pip install "sparc[algorithm] @ git+ssh://git@github.com/lars-olt/sparc.git"
+```
+
+Use the first form for lightweight consumers such as ROIStudio Lite and the
+second for applications that expose SPARC's algorithm.
+
 ### 2. GPU acceleration (optional)
 
-SPARC runs in CPU mode by default. For faster segmentation, install PyTorch with CUDA support on top of the uv environment. Find the right command for your system and CUDA version at [pytorch.org/get-started/locally](https://pytorch.org/get-started/locally/), then run it with `--force-reinstall`:
+The algorithm extra runs in CPU mode by default. For faster segmentation,
+install PyTorch with CUDA support on top of the uv environment. Find the right
+command for your system and CUDA version at
+[pytorch.org/get-started/locally](https://pytorch.org/get-started/locally/), then
+run it with `--force-reinstall`:
 
 ```bash
 # example for CUDA 12.1 - replace cu121 with your version

@@ -8,6 +8,7 @@ from operator import mul
 from pathlib import Path
 from typing import TypedDict, Optional, Dict
 from marslab.imgops.imgutils import crop, eightbit
+import asdf as _asdf  # asdf_settings expects its parent package in sys.modules
 import asdf_settings.metadata
 from asdf_settings import rapidlooks
 

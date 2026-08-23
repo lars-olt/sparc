@@ -9,29 +9,17 @@ description = "Spectral Pattern Analysis for ROI Classification"
 requires-python = "==3.11.*"
 dependencies = [
     # --- Core scientific stack ---
-    # numpy<2 is required: torch is compiled against NumPy 1.x and its C API
-    # is incompatible with NumPy 2.x (causes _ARRAY_API not found at runtime).
+    # Keep the base environment compatible with the supported PyTorch extra;
+    # PyTorch 2.2 is compiled against the NumPy 1.x C API.
     "numpy>=1.24,<2",
     "scipy>=1.7.0",
     "pandas>=1.3.0,<3.0",
-    "scikit-learn>=1.0.0",
     "scikit-image>=0.19.0",
     "matplotlib>=3.3.0",
     "astropy>=5.0",
 
     # --- Computer vision ---
     "opencv-python>=4.5.0",
-
-    # --- SAM segmentation ---
-    # torch 2.2.2 is the last version with wheels for Intel Mac (macosx_x86_64).
-    # Windows wheels for 2.2.x are only available on the PyTorch index (not PyPI),
-    # so we use [tool.uv.sources] to route Windows to the PyTorch CPU index.
-    "torch>=2.0.0,<2.3.0",
-    "torchvision>=0.15.0,<0.18.0",
-    "segment-anything>=1.0",
-
-    # --- Spectral analysis ---
-    "kneed>=0.7.0",
 
     # --- MillionConcepts stack ---
     # These are not on PyPI - installed from GitHub via SSH.
@@ -45,7 +33,6 @@ dependencies = [
     "rapid>=0.0.3",
 
     # --- Utilities ---
-    "psutil>=5.8.0",
     "PyYAML>=6.0",
     "fs>=2.4.0",
     "rich>=12.0.0",
@@ -58,6 +45,18 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Segmentation and spectral clustering. Consumers that only need SPARC's data
+# loading, ROI editing, spectra, and file I/O can omit this extra.
+algorithm = [
+    "scikit-learn>=1.0.0",
+    "kneed>=0.7.0",
+    "psutil>=5.8.0",
+    # torch 2.2.2 is the last version with wheels for Intel Mac (macosx_x86_64).
+    "torch>=2.0.0,<2.3.0",
+    "torchvision>=0.15.0,<0.18.0",
+    "segment-anything>=1.0",
+]
+
 # Notebook development dependencies
 dev = [
     "jupyter>=1.0.0",

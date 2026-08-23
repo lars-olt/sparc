@@ -2,7 +2,6 @@
 
 import warnings
 import os
-import psutil
 import platform
 from functools import wraps
 from typing import Any, Callable, Iterable, List, Optional
@@ -54,7 +53,13 @@ def run_parallel(
     """Map a function over items with a thread or process executor."""
     # Auto-detect CPUs if not provided
     if n_jobs is None:
-        n_jobs = max(1, psutil.cpu_count(logical=False) or 1)
+        try:
+            import psutil
+        except ModuleNotFoundError:
+            cpu_count = os.cpu_count()
+        else:
+            cpu_count = psutil.cpu_count(logical=False)
+        n_jobs = max(1, cpu_count or 1)
         
     # Ensure worker threads don't spawn sub-threads
     configure_worker_env(1)
