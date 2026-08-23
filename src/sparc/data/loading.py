@@ -98,17 +98,30 @@ def _scan_and_split(iof_path, seq_id=None):
 
 def _bandset_from_group(group):
     """Build and format a ZcamBandSet from a pre-filtered metadata DataFrame."""
-    from asdf.scan import rate_cal_offset
+    from asdf.scan import rate_cal_offset, rate_completion
     from asdf.zcam_bandset import ZcamBandSet
 
-    # Deduplicate: one file per filter, best cal_offset score wins.
+    # Deduplicate one file per filter.  A partial downlink must never beat an
+    # available complete product; calibration chronology only ranks products
+    # that remain after that quality check.
     keep_rows = []
     for _filt, fgroup in group.groupby('FILTER'):
         if len(fgroup) == 1:
             keep_rows.append(fgroup.iloc[0])
         else:
-            scores = rate_cal_offset(fgroup)
-            keep_rows.append(fgroup.loc[scores[scores].index[0]])
+            candidates = fgroup
+            completion = (
+                rate_completion(candidates)
+                if 'COMPLETION' in candidates.columns
+                else None
+            )
+            if completion is not None and completion.any():
+                candidates = candidates.loc[completion]
+
+            scores = rate_cal_offset(candidates)
+            if scores is not None and scores.any():
+                candidates = candidates.loc[scores]
+            keep_rows.append(candidates.iloc[0])
 
     deduped = pd.DataFrame(keep_rows).reset_index(drop=True)
     bs = ZcamBandSet(deduped)
@@ -172,6 +185,31 @@ def _rgb_from_keys(keys, bands, shape, stretch_fn):
 # ZCAM
 # ---------------------------------------------------------------------------
 
+def _load_zcam_base_bands(bandset, filters):
+    """Load ZCAM bands while retaining invalid pixels through debayering."""
+    filters = tuple(filters)
+    bandset.load("all")
+
+    # marslab's debayering returns plain ndarrays.  Preserve the masks loaded
+    # from partial/corrupt products and restore them as NaN afterward so
+    # missing pixels cannot become zero reflectance.
+    invalid_masks = {}
+    for band in filters:
+        array = bandset.get_band(band)
+        if np.ma.isMaskedArray(array):
+            invalid_masks[band] = np.ma.getmaskarray(array).copy()
+
+    bandset.bulk_debayer("all")
+
+    base_bands = {}
+    for band in filters:
+        array = np.asarray(bandset.get_band(band))
+        invalid = invalid_masks.get(band)
+        if invalid is not None and invalid.shape == array.shape:
+            array = np.where(invalid, np.nan, array)
+        base_bands[band] = crop(array, ZCAM_CROP).copy()
+    return base_bands
+
 def _load_zcam_cube(
     iof_path, seq_id, obs_ix, do_apply_pixmaps, ignore_bayers, rgb_bands
 ):
@@ -194,9 +232,7 @@ def _load_zcam_cube(
     if ignore_bayers:
         filters = filters.loc[~filters.str.contains("0")].reset_index()
 
-    bandset.load("all")
-    bandset.bulk_debayer("all")
-    base_bands = {b: crop(bandset.get_band(b), ZCAM_CROP).copy() for b in filters}
+    base_bands = _load_zcam_base_bands(bandset, filters)
 
     pixmaps = _load_zcam_pixmaps(bandset) if do_apply_pixmaps else {}
     using_pixmaps = bool(pixmaps)

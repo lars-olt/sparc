@@ -4,8 +4,11 @@ from unittest.mock import patch
 
 import asdf
 import numpy as np
+import pandas as pd
 
 from sparc.data.loading import (
+    _bandset_from_group,
+    _load_zcam_base_bands,
     _load_zcam_pixmaps,
     _pcam_rgb,
     apply_pixel_masks,
@@ -24,6 +27,57 @@ class FakeBandset:
 
     def load_metamaps(self, code):
         self.pixmaps = {"L1": np.zeros((2, 2), dtype=np.uint8)}
+
+
+class FakeZcamBandset:
+    def __init__(self, metadata):
+        self.metadata = metadata
+
+    def format_metadata(self):
+        pass
+
+
+class FakeMaskedBandset:
+    def __init__(self):
+        self.band = np.ma.array(
+            [[1.0, 0.0], [2.0, 3.0]],
+            mask=[[False, True], [False, False]],
+            dtype=np.float32,
+        )
+
+    def load(self, bands):
+        pass
+
+    def get_band(self, band):
+        return self.band
+
+    def bulk_debayer(self, bands):
+        self.band = np.asarray(self.band)
+
+
+def test_bandset_prefers_complete_product_over_partial_duplicate():
+    group = pd.DataFrame(
+        {
+            "FILTER": ["L5", "L5"],
+            "COMPLETION": ["PARTIAL", "COMPLETE_CHECKSUM_PASS"],
+            "PATH": ["partial.img", "complete.img"],
+        }
+    )
+
+    with patch("asdf.zcam_bandset.ZcamBandSet", FakeZcamBandset):
+        bandset = _bandset_from_group(group)
+
+    assert bandset.metadata["PATH"].tolist() == ["complete.img"]
+
+
+def test_zcam_load_restores_source_mask_as_nan_after_debayering():
+    bandset = FakeMaskedBandset()
+
+    with patch("sparc.data.loading.ZCAM_CROP", (0, 0, 0, 0)):
+        bands = _load_zcam_base_bands(bandset, ["L5"])
+
+    assert np.isnan(bands["L5"][0, 1])
+    assert bands["L5"][1, 1] == 3.0
 
 
 def test_load_zcam_pixmaps_loads_available_maps():
