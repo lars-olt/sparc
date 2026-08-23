@@ -22,6 +22,7 @@ def _single_match(directory, pattern):
 
 
 def verify(dist_directory):
+    # A release is only valid when both public distribution formats were built.
     wheel = _single_match(dist_directory, '*.whl')
     source = _single_match(dist_directory, '*.tar.gz')
 
@@ -35,6 +36,7 @@ def verify(dist_directory):
     with tarfile.open(source, 'r:gz') as archive:
         source_names = set(archive.getnames())
 
+    # These templates and lookup tables are needed after the package is installed.
     for resource in REQUIRED_RESOURCES:
         wheel_path = f'sparc/resources/{resource}'
         if wheel_path not in wheel_names:
@@ -42,6 +44,7 @@ def verify(dist_directory):
         if not any(name.endswith(f'/src/{wheel_path}') for name in source_names):
             raise AssertionError(f'source distribution is missing {wheel_path}')
 
+    # ROIStudio Full depends on this extra being advertised by the wheel.
     if 'Provides-Extra: algorithm' not in metadata:
         raise AssertionError('wheel metadata is missing the algorithm extra')
 

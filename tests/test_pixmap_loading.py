@@ -1,8 +1,8 @@
 import warnings
-from types import SimpleNamespace
+import sys
+from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
 
-import asdf
 import numpy as np
 import pandas as pd
 
@@ -55,6 +55,14 @@ class FakeMaskedBandset:
         self.band = np.asarray(self.band)
 
 
+def fake_module(name, **attributes):
+    module = ModuleType(name)
+    for key, value in attributes.items():
+        setattr(module, key, value)
+    return module
+
+
+# When two filters collide, the complete downlink should always win.
 def test_bandset_prefers_complete_product_over_partial_duplicate():
     group = pd.DataFrame(
         {
@@ -64,12 +72,27 @@ def test_bandset_prefers_complete_product_over_partial_duplicate():
         }
     )
 
-    with patch("asdf.zcam_bandset.ZcamBandSet", FakeZcamBandset):
+    scan = fake_module(
+        "asdf.scan",
+        rate_completion=lambda rows: rows["COMPLETION"].eq(
+            "COMPLETE_CHECKSUM_PASS"
+        ),
+        rate_cal_offset=lambda _rows: None,
+    )
+    zcam_bandset = fake_module(
+        "asdf.zcam_bandset",
+        ZcamBandSet=FakeZcamBandset,
+    )
+    with patch.dict(sys.modules, {
+        "asdf.scan": scan,
+        "asdf.zcam_bandset": zcam_bandset,
+    }):
         bandset = _bandset_from_group(group)
 
     assert bandset.metadata["PATH"].tolist() == ["complete.img"]
 
 
+# Debayering should not turn a known bad source pixel back into real data.
 def test_zcam_load_restores_source_mask_as_nan_after_debayering():
     bandset = FakeMaskedBandset()
 
@@ -80,10 +103,15 @@ def test_zcam_load_restores_source_mask_as_nan_after_debayering():
     assert bands["L5"][1, 1] == 3.0
 
 
+# A partial set of pixel maps should still be associated with the right files.
 def test_load_zcam_pixmaps_loads_available_maps():
     bandset = FakeBandset(["left.img", "right.img"])
     result = ({"left.img": "left-map.img"}, [])
-    with patch("asdf.scan.find_obs_metamaps", return_value=result):
+    scan = fake_module(
+        "asdf.scan",
+        find_obs_metamaps=lambda _paths, code: result,
+    )
+    with patch.dict(sys.modules, {"asdf.scan": scan}):
         pixmaps = _load_zcam_pixmaps(bandset)
 
     assert pixmaps.keys() == {"L1"}
@@ -93,19 +121,25 @@ def test_load_zcam_pixmaps_loads_available_maps():
     )
 
 
+# A complete set of maps should be passed through without changing the paths.
 def test_load_zcam_pixmaps_associates_and_loads_complete_maps():
     bandset = FakeBandset(["left.img", "right.img"])
     metamaps = {
         "left.img": "left-map.img",
         "right.img": "right-map.img",
     }
-    with patch("asdf.scan.find_obs_metamaps", return_value=(metamaps, [])):
+    scan = fake_module(
+        "asdf.scan",
+        find_obs_metamaps=lambda _paths, code: (metamaps, []),
+    )
+    with patch.dict(sys.modules, {"asdf.scan": scan}):
         pixmaps = _load_zcam_pixmaps(bandset)
 
     assert pixmaps.keys() == {"L1"}
     assert bandset.associated == (metamaps, "pix_map")
 
 
+# Each filter should only use the bad-pixel flags from its own map.
 def test_pixel_masks_remove_saturated_and_hot_pixels_by_band():
     bands = {
         "L1": np.ones((2, 2), dtype=np.float32),
@@ -128,6 +162,7 @@ def test_pixel_masks_remove_saturated_and_hot_pixels_by_band():
     assert np.isfinite(masked["R1"][0, 1])
 
 
+# The three Bayer channels all come from the same clear-filter pixel map.
 def test_pixel_masks_use_clear_filter_map_for_bayer_channels():
     bands = {
         "L0R": np.ones((2, 2), dtype=np.float32),
@@ -145,6 +180,7 @@ def test_pixel_masks_use_clear_filter_map_for_bayer_channels():
         assert np.isfinite(masked[band][1, 1])
 
 
+# Masked Pancam data should still produce a clean RGB preview.
 def test_pcam_rgb_handles_masked_pixels_without_warnings():
     band = np.ma.array(
         np.arange(100, dtype=np.float32).reshape(10, 10),
@@ -158,6 +194,7 @@ def test_pcam_rgb_handles_masked_pixels_without_warnings():
     assert rgb.shape == (10, 10, 3)
 
 
+# The ZCAM preview path should be just as quiet with masked data.
 def test_dcs_rgb_handles_masked_pixels_without_warnings():
     band = np.ma.array(
         np.arange(100, dtype=np.float32).reshape(10, 10),

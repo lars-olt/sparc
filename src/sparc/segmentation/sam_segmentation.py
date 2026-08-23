@@ -5,6 +5,8 @@ import torch
 from segment_anything import sam_model_registry, SamAutomaticMaskGenerator
 from typing import Optional
 
+from ..utils.memory import release_cuda_memory
+
 
 def segment_image(model_path: str,
                  img: np.ndarray,
@@ -16,11 +18,21 @@ def segment_image(model_path: str,
     """Segment an RGB image with SAM and return integer labels per pixel."""
     device = select_device(use_gpu)
     model_type = detect_model_type(model_path, model_type)
-    
-    sam_model = load_sam_model(model_path, model_type, device)
-    masks = generate_masks(sam_model, img, points_per_side, pred_iou_thresh)
-    
-    return convert_masks_to_segments(masks, img.shape[:2], preserve_background)
+
+    sam_model = None
+    masks = None
+    try:
+        sam_model = load_sam_model(model_path, model_type, device)
+        masks = generate_masks(sam_model, img, points_per_side, pred_iou_thresh)
+        return convert_masks_to_segments(
+            masks, img.shape[:2], preserve_background
+        )
+    finally:
+        # SAM is loaded per run. Drop its tensors before returning control to
+        # the long-lived desktop process, including when CUDA raises an OOM.
+        del masks
+        del sam_model
+        release_cuda_memory()
 
 
 def select_device(use_gpu: bool) -> torch.device:

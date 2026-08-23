@@ -58,6 +58,7 @@ def run_with_algorithm_imports_blocked(code: str) -> subprocess.CompletedProcess
     )
 
 
+# The base package should work without silently pulling in the algorithm stack.
 class OptionalAlgorithmImportTests(unittest.TestCase):
     def assert_script_succeeds(self, code: str) -> None:
         completed = run_with_algorithm_imports_blocked(code)
@@ -68,6 +69,7 @@ class OptionalAlgorithmImportTests(unittest.TestCase):
         )
 
     def test_lightweight_public_apis_do_not_import_algorithm_stack(self):
+        # This blocks every heavy package and then imports the real public APIs.
         self.assert_script_succeeds(
             """
             import sys
@@ -98,6 +100,7 @@ class OptionalAlgorithmImportTests(unittest.TestCase):
         )
 
     def test_algorithm_api_explains_how_to_install_the_extra(self):
+        # Asking for the algorithm should fail with an instruction the user can act on.
         self.assert_script_succeeds(
             """
             import sparc

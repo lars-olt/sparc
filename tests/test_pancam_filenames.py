@@ -1,9 +1,9 @@
-import asdf
 import unittest
 
 from sparc.utils.pancam_helpers import parse_pcam_fn
 
 
+# Archive placeholders are valid Pancam locations and should still parse normally.
 class PancamFilenameTests(unittest.TestCase):
     def test_parse_pcam_fn_accepts_archive_location_placeholders(self):
         for location in ('as__', 'as##'):

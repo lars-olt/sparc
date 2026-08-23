@@ -71,6 +71,9 @@ where = ["src"]
 [tool.setuptools.package-data]
 sparc = ["resources/*.sel", "resources/*.csv.gz"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
 [tool.uv]
 # Ensure the lockfile covers all supported platforms so it works on both
 # Intel Mac, Apple Silicon Mac, and Windows x86_64.

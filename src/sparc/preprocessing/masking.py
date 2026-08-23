@@ -39,12 +39,14 @@ def apply_masking(load_result: Dict[str, Any],
         right_for_masking = right_cube
 
     shadow_mask = threshold_mask(cube_for_masking,  **shadow_params)
-    sky_mask    = skymask(cube_for_masking,          **sky_params)
+    # marslab's percentile stretch expects invalid values to be represented
+    # by a mask. Plain ndarrays containing even one NaN normalize to all-NaN.
+    sky_mask    = _skymask_invalid(cube_for_masking, **sky_params)
 
     left_shadow_mask  = threshold_mask(left_for_masking,  **shadow_params)
-    left_sky_mask     = skymask(left_for_masking,          **sky_params)
+    left_sky_mask     = _skymask_invalid(left_for_masking, **sky_params)
     right_shadow_mask = threshold_mask(right_for_masking, **shadow_params)
-    right_sky_mask    = skymask(right_for_masking,         **sky_params)
+    right_sky_mask    = _skymask_invalid(right_for_masking, **sky_params)
 
     full_mask       = shadow_mask | sky_mask | load_result['homography_mask']
     left_full_mask  = left_shadow_mask  | left_sky_mask
@@ -65,6 +67,11 @@ def apply_masking(load_result: Dict[str, Any],
         'right_sky_mask':   right_sky_mask,
         'right_full_mask':  right_full_mask,
     }
+
+
+def _skymask_invalid(arrays: np.ndarray, **params) -> np.ndarray:
+    """Run sky detection while excluding NaN and infinite pixels."""
+    return skymask(np.ma.masked_invalid(arrays), **params)
 
 
 def _right_bands_from_base(base_bands: Dict[str, np.ndarray]) -> np.ndarray:

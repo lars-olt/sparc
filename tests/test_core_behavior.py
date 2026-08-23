@@ -19,6 +19,7 @@ from sparc.preprocessing.calibration import (
     apply_photometric_calibration,
     extract_incidence_angle,
 )
+from sparc.preprocessing.masking import apply_masking
 from sparc.spectral.metrics import (
     compute_roi_spectra,
     correlation_distance,
@@ -26,8 +27,10 @@ from sparc.spectral.metrics import (
     spectral_angle_distance,
     spectral_angle_similarity,
 )
+from sparc.utils.memory import release_cuda_memory
 
 
+# The basic distance math should stay predictable, including awkward inputs.
 class SpectralMetricTests(unittest.TestCase):
     def test_standard_distance_cases(self):
         horizontal = np.array([1.0, 0.0])
@@ -61,6 +64,7 @@ class SpectralMetricTests(unittest.TestCase):
         )
 
 
+# Calibration should use the right angle for each camera and fail safely without one.
 class CalibrationTests(unittest.TestCase):
     def test_zcam_incidence_angle_calibrates_iof(self):
         metadata = pd.DataFrame({'INCIDENCE_ANGLE': [60.0, 60.0]})
@@ -84,6 +88,35 @@ class CalibrationTests(unittest.TestCase):
         self.assertIs(result, cube)
 
 
+# One bad ZCAM pixel should be masked instead of breaking the whole sky mask.
+class MaskingTests(unittest.TestCase):
+    def test_sparse_invalid_zcam_pixels_do_not_break_sky_masking(self):
+        gradient = np.linspace(0.05, 0.75, 64 * 64).reshape(64, 64)
+        cube = np.stack((gradient, gradient * 0.8, gradient * 1.2))
+        cube[:, 12, 18] = np.nan
+
+        result = apply_masking(
+            {
+                'cube': cube,
+                'left_cube': cube.copy(),
+                'right_cube': cube.copy(),
+                'homography_mask': np.zeros((64, 64), dtype=bool),
+                'instrument': 'ZCAM',
+            },
+            using_pixmaps=False,
+            shadow_params={'percentiles': (20, 100), 'operator': 'and'},
+            sky_params={
+                'percentile': 75,
+                'input_stretch': (10, 1),
+                'respect_mask': False,
+            },
+        )
+
+        self.assertEqual(result['sky_mask'].shape, (64, 64))
+        self.assertTrue(result['masked_cube'].mask[:, 12, 18].all())
+
+
+# Each run needs its own settings and a safe backend for the current machine.
 class ConfigurationTests(unittest.TestCase):
     def make_config(self):
         return SparcConfig(
@@ -117,6 +150,34 @@ class ConfigurationTests(unittest.TestCase):
             config.validate()
 
         self.assertEqual(config.segment.backend, SegmentationBackend.CPU)
+
+
+# Cleanup should release CUDA when present and remain harmless when it is absent.
+class MemoryCleanupTests(unittest.TestCase):
+    def test_cuda_cache_is_released_after_garbage_collection(self):
+        fake_cuda = SimpleNamespace(
+            is_initialized=lambda: True,
+            empty_cache=unittest.mock.Mock(),
+        )
+        fake_torch = SimpleNamespace(cuda=fake_cuda)
+
+        with (
+            patch.dict(sys.modules, {'torch': fake_torch}),
+            patch('sparc.utils.memory.gc.collect') as collect,
+        ):
+            release_cuda_memory()
+
+        collect.assert_called_once_with()
+        fake_cuda.empty_cache.assert_called_once_with()
+
+    def test_cleanup_remains_available_without_torch(self):
+        with (
+            patch.dict(sys.modules, {'torch': None}),
+            patch('sparc.utils.memory.gc.collect') as collect,
+        ):
+            release_cuda_memory()
+
+        collect.assert_called_once_with()
 
 
 if __name__ == '__main__':
