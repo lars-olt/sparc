@@ -22,14 +22,14 @@ dependencies = [
     "opencv-python>=4.5.0",
 
     # --- MillionConcepts stack ---
-    # These are not on PyPI - installed from GitHub via SSH.
+    # These are not on PyPI, but their public GitHub repositories can be
+    # installed over HTTPS without requiring an SSH key in CI.
     # uv lock records the exact commit for reproducibility.
-    # Requires SSH key with access to MillionConcepts GitHub org.
-    "asdf @ git+ssh://git@github.com/MillionConcepts/asdf.git",
-    "pdr @ git+ssh://git@github.com/MillionConcepts/pdr.git",
-    "silencio @ git+ssh://git@github.com/MillionConcepts/silencio.git",
-    "pretty-plot @ git+ssh://git@github.com/MillionConcepts/pretty-plot.git",
-    "marslab @ git+ssh://git@github.com/MillionConcepts/marslab.git",
+    "asdf @ git+https://github.com/MillionConcepts/asdf.git",
+    "pdr @ git+https://github.com/MillionConcepts/pdr.git",
+    "silencio @ git+https://github.com/MillionConcepts/silencio.git",
+    "pretty-plot @ git+https://github.com/MillionConcepts/pretty-plot.git",
+    "marslab @ git+https://github.com/MillionConcepts/marslab.git",
     "rapid>=0.0.3",
 
     # --- Utilities ---
