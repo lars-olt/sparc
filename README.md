@@ -90,7 +90,7 @@ packages you have installed.
 The command installs the pipeline dependencies but leaves PyTorch for the next
 step. The standard environment pins an older PyTorch version; RoMa uses 2.6.
 
-### 2. Install PyTorch and RoMa
+### 2. Install PyTorch
 
 Run **one** of these commands from the same directory:
 
@@ -115,14 +115,20 @@ uv pip install --python .venv --reinstall "numpy<2" torch==2.6.0 torchvision==0.
 
 These are the [PyTorch 2.6 installation builds](https://pytorch.org/get-started/previous-versions/#v260).
 `--reinstall` also handles switching an existing installation between CPU and CUDA.
-Then install RoMa in that same environment. This step is required after
-installing PyTorch; wait for it to finish successfully before launching:
+
+### 3. Install requirements-roma.txt (required)
+
+From the `sparc` directory, run this command on Windows or macOS to install
+RoMa and its dependencies into `sparc/.venv`:
 
 ```bash
 uv pip install --python .venv -r requirements-roma.txt
 ```
 
-### 3. Check and run
+Complete this step after installing PyTorch, including when updating an existing
+environment. Wait for the installation to succeed before continuing.
+
+### 4. Check and run
 
 Check the Python path, RoMa import, and selected device. The printed Python
 path should be inside this checkout’s `sparc/.venv`:
@@ -157,7 +163,7 @@ Its environment includes SPARC and can run both the GUI and terminal pipeline.
 
 **Keep `--no-sync` when launching.** A plain `uv run` or `uv sync` restores the
 standard dependency pins and can remove RoMa or downgrade PyTorch. If that
-happens, repeat step 2. You can also activate `.venv` and run `python` directly.
+happens, repeat steps 2 and 3. You can also activate `.venv` and run `python` directly.
 
 ## Quick Start
 
