@@ -55,7 +55,8 @@ jobs:
       - name: Install SPARC and test runner
         run: |
           uv pip install -e .
-          uv pip install "pytest>=8,<10"
+          # Pipeline tests import spectral clustering; model inference is mocked.
+          uv pip install "pytest>=8,<10" "scikit-learn>=1.0.0" "kneed>=0.7.0"
 
       - name: Run test suite
         run: ${{ matrix.python }} -m pytest -q

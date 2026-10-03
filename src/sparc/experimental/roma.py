@@ -23,9 +23,12 @@ def _model(device):
     try:
         from romatch import roma_outdoor
     except ImportError as exc:
+        missing_roma = isinstance(exc, ModuleNotFoundError) and exc.name == 'romatch'
+        problem = 'RoMa is not installed' if missing_roma else 'RoMa could not be imported'
         raise RuntimeError(
-            'RoMa is not installed in this Python environment. Install SPARC requirements-roma.txt '
-            'in the experimental environment, or select homography.'
+            f'{problem} in Python "{sys.executable}". '
+            f'Import error: {exc}. Install SPARC requirements-roma.txt in this '
+            'environment, then restart ROIStudio, or select homography.'
         ) from exc
     with warnings.catch_warnings():
         warnings.filterwarnings(

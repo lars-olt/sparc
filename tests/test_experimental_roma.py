@@ -79,6 +79,31 @@ class ArrayTensor:
 
 
 class RoMaAdapterTests(unittest.TestCase):
+    def test_import_errors_identify_environment_and_underlying_failure(self):
+        errors = (
+            (ModuleNotFoundError("No module named 'romatch'", name='romatch'),
+             'RoMa is not installed'),
+            (ModuleNotFoundError("No module named 'kornia'", name='kornia'),
+             'RoMa could not be imported'),
+            (ImportError('incompatible dependency'), 'RoMa could not be imported'),
+        )
+        real_import = __import__
+        for error, expected in errors:
+            with self.subTest(error=error):
+                def import_module(name, *args, **kwargs):
+                    if name == 'romatch':
+                        raise error
+                    return real_import(name, *args, **kwargs)
+
+                with patch.dict(sys.modules, {'torch': SimpleNamespace()}):
+                    with patch('builtins.__import__', side_effect=import_module):
+                        with self.assertRaises(RuntimeError) as raised:
+                            roma._model.__wrapped__('cpu')
+                self.assertIn(expected, str(raised.exception))
+                self.assertIn(sys.executable, str(raised.exception))
+                self.assertIn(str(error), str(raised.exception))
+                self.assertIs(raised.exception.__cause__, error)
+
     def test_batched_symmetric_output_has_correct_directions(self):
         h, w = 12, 16
         y, x = np.indices((h, w), dtype=np.float32)
