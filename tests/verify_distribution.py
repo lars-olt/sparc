@@ -36,6 +36,12 @@ def verify(dist_directory):
     with tarfile.open(source, 'r:gz') as archive:
         source_names = set(archive.getnames())
 
+    for name in wheel_names | source_names:
+        parts = name.split('/')
+        if ('roistudio_roma_batch.ipynb' in parts or 'notebook_support' in parts
+                or 'notebook_outputs' in parts or name.endswith('.pth')):
+            raise AssertionError(f'local experiment artifact in distribution: {name}')
+
     # These templates and lookup tables are needed after the package is installed.
     for resource in REQUIRED_RESOURCES:
         wheel_path = f'sparc/resources/{resource}'

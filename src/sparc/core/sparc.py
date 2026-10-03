@@ -72,8 +72,10 @@ class Sparc:
          obs_ix: int = 0,
          do_apply_pixmaps: bool = True,
          ignore_bayers: bool = False,
-         rgb_bands: Optional[tuple] = None) -> 'Sparc':
+         rgb_bands: Optional[tuple] = None,
+         alignment=None) -> 'Sparc':
         """Load hyperspectral data."""
+        from .config import AlignmentConfig
         self.config.load = LoadConfig(
             iof_path=iof_path,
             instrument=instrument,
@@ -81,7 +83,8 @@ class Sparc:
             obs_ix=obs_ix,
             do_apply_pixmaps=do_apply_pixmaps,
             ignore_bayers=ignore_bayers,
-            rgb_bands=rgb_bands
+            rgb_bands=rgb_bands,
+            alignment=alignment or AlignmentConfig(),
         )
 
         self.state = load_step(self.state, self.config)

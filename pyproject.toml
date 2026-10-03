@@ -44,6 +44,9 @@ dependencies = [
     "setuptools<81",
 ]
 
+[project.scripts]
+sparc = "sparc.cli:main"
+
 [project.optional-dependencies]
 # Segmentation and spectral clustering. Consumers that only need SPARC's data
 # loading, ROI editing, spectra, and file I/O can omit this extra.

@@ -21,7 +21,7 @@ def _load_sam_segmentation_with_dependency_stubs():
     fake_utils = types.ModuleType('sparc.utils')
     fake_utils.__path__ = []
     fake_memory = types.ModuleType('sparc.utils.memory')
-    fake_memory.release_cuda_memory = Mock()
+    fake_memory.release_accelerator_memory = Mock()
     fake_torch = types.ModuleType('torch')
     fake_torch.device = object
     fake_segment_anything = types.ModuleType('segment_anything')
@@ -41,6 +41,7 @@ def _load_sam_segmentation_with_dependency_stubs():
             'sparc.segmentation': fake_segmentation,
             'sparc.utils': fake_utils,
             'sparc.utils.memory': fake_memory,
+            'sparc.utils.device': types.SimpleNamespace(prepare_accelerators=lambda: None, resolve_device=Mock()),
             'torch': fake_torch,
             'segment_anything': fake_segment_anything,
         },
@@ -64,7 +65,7 @@ class SamResourceLifecycleTests(unittest.TestCase):
                 'generate_masks',
                 side_effect=RuntimeError('CUDA out of memory'),
             ),
-            patch.object(segmentation, 'release_cuda_memory', cleanup),
+            patch.object(segmentation, 'release_accelerator_memory', cleanup),
         ):
             with self.assertRaisesRegex(RuntimeError, 'CUDA out of memory'):
                 segmentation.segment_image(

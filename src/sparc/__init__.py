@@ -13,6 +13,7 @@ _LAZY_IMPORTS = {
     "run_sparc_steps": (".core.functional", "run_sparc_steps"),
     "SparcConfig": (".core.config", "SparcConfig"),
     "LoadConfig": (".core.config", "LoadConfig"),
+    "AlignmentConfig": (".core.config", "AlignmentConfig"),
     "PreprocessConfig": (".core.config", "PreprocessConfig"),
     "SegmentConfig": (".core.config", "SegmentConfig"),
     "ROIConfig": (".core.config", "ROIConfig"),

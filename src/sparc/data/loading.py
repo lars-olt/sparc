@@ -154,13 +154,24 @@ def load_cube(
     do_apply_pixmaps: bool,
     ignore_bayers: bool,
     rgb_bands: Optional[tuple] = None,
+    alignment=None,
 ) -> LoadResult:
     """Load and align a hyperspectral cube from ZCAM or Pancam."""
+    if alignment is not None:
+        alignment.validate()
+        import sys
+        if alignment.method == 'roma' and getattr(sys, 'frozen', False):
+            raise RuntimeError('Experimental RoMa is unavailable in packaged builds.')
     if instrument == "PCAM":
-        return _load_pcam_cube(iof_path, seq_id, obs_ix, rgb_bands)
-    return _load_zcam_cube(
-        iof_path, seq_id, obs_ix, do_apply_pixmaps, ignore_bayers, rgb_bands
-    )
+        result = _load_pcam_cube(iof_path, seq_id, obs_ix, rgb_bands)
+    else:
+        result = _load_zcam_cube(
+            iof_path, seq_id, obs_ix, do_apply_pixmaps, ignore_bayers, rgb_bands
+        )
+    if alignment is not None:
+        from .alignment import align_loaded_scene
+        result = align_loaded_scene(result, alignment)
+    return result
 
 
 def _rgb_from_keys(keys, bands, shape, stretch_fn):

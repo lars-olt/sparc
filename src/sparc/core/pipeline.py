@@ -34,6 +34,7 @@ def load_step(state: SparcState, config: SparcConfig) -> SparcState:
         do_apply_pixmaps = config.load.do_apply_pixmaps,
         ignore_bayers    = config.load.ignore_bayers,
         rgb_bands        = config.load.rgb_bands,
+        alignment        = config.load.alignment,
     )
 
     state.instrument_config['wavelengths'] = load_result['bandset']._sparc_wavelengths
@@ -102,6 +103,7 @@ def segment_step(state: SparcState, config: SparcConfig) -> SparcState:
         points_per_side     = config.segment.points_per_side,
         pred_iou_thresh     = config.segment.pred_iou_thresh,
         model_type          = config.segment.model_type,
+        device              = config.segment.device,
     )
 
     logger.info(f"Found {len(np.unique(state.segments))} segments in {time.time() - t0:.2f}s")
@@ -257,7 +259,22 @@ def selection_step(state: SparcState, config: SparcConfig) -> SparcState:
     state.final_stds    = selected_stds[state.roi_indices]
 
     homography = state.load_result.get('homography_matrix')
-    if homography is not None:
+    mapping = state.load_result.get('stereo_mapping')
+    if mapping is not None:
+        # Retain only pairs with an inscribed rectangle supported by the dense
+        # field. Keep all selected arrays and candidate indices synchronized.
+        keep, left_rois = [], []
+        for index, roi in enumerate(state.final_rois):
+            left_rect = mapping.map_rect(tuple(roi), 'right')
+            if left_rect is not None:
+                keep.append(index)
+                left_rois.append(left_rect)
+        state.final_rois = state.final_rois[keep]
+        state.final_spectra = state.final_spectra[keep]
+        state.final_stds = state.final_stds[keep]
+        state.roi_indices = np.asarray(state.roi_indices)[keep]
+        state.final_left_rois = np.asarray(left_rois, dtype=int).reshape(-1, 4)
+    elif homography is not None:
         from ..utils.geometry import right_rect_to_left_inscribed
         left_rois = []
         for roi in state.final_rois:

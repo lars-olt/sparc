@@ -1,11 +1,14 @@
 """SAM-based image segmentation."""
 
 import numpy as np
+from ..utils.device import prepare_accelerators, resolve_device
+
+prepare_accelerators()
 import torch
 from segment_anything import sam_model_registry, SamAutomaticMaskGenerator
 from typing import Optional
 
-from ..utils.memory import release_cuda_memory
+from ..utils.memory import release_accelerator_memory
 
 
 def segment_image(model_path: str,
@@ -14,9 +17,10 @@ def segment_image(model_path: str,
                  use_gpu: bool = True,
                  preserve_background: bool = False,
                  points_per_side: int = 32,
-                 pred_iou_thresh: float = 0.88) -> np.ndarray:
+                 pred_iou_thresh: float = 0.88,
+                 device: Optional[str] = None) -> np.ndarray:
     """Segment an RGB image with SAM and return integer labels per pixel."""
-    device = select_device(use_gpu)
+    device = resolve_device(device) if device is not None else select_device(use_gpu)
     model_type = detect_model_type(model_path, model_type)
 
     sam_model = None
@@ -32,14 +36,12 @@ def segment_image(model_path: str,
         # the long-lived desktop process, including when CUDA raises an OOM.
         del masks
         del sam_model
-        release_cuda_memory()
+        release_accelerator_memory()
 
 
 def select_device(use_gpu: bool) -> torch.device:
-    """Return a CUDA device when requested and available, otherwise CPU."""
-    if use_gpu and torch.cuda.is_available():
-        return torch.device('cuda:0')
-    return torch.device('cpu')
+    """Choose an available accelerator when requested, otherwise CPU."""
+    return resolve_device('auto' if use_gpu else 'cpu')
 
 
 def detect_model_type(model_path: str, model_type: Optional[str]) -> str:

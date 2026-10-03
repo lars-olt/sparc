@@ -3,8 +3,8 @@
 import gc
 
 
-def release_cuda_memory() -> None:
-    """Release unreachable objects and unused PyTorch CUDA cache blocks."""
+def release_accelerator_memory() -> None:
+    """Release unused CUDA/MPS cache blocks without hiding an inference error."""
     gc.collect()
 
     try:
@@ -16,5 +16,9 @@ def release_cuda_memory() -> None:
         if torch.cuda.is_initialized():
             torch.cuda.empty_cache()
     except (AttributeError, RuntimeError):
-        # Cleanup must never hide the pipeline result or its original error.
-        return
+        pass
+    try:
+        if torch.backends.mps.is_available():
+            torch.mps.empty_cache()
+    except (AttributeError, RuntimeError):
+        pass

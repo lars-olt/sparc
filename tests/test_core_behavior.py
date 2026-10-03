@@ -27,7 +27,7 @@ from sparc.spectral.metrics import (
     spectral_angle_distance,
     spectral_angle_similarity,
 )
-from sparc.utils.memory import release_cuda_memory
+from sparc.utils.memory import release_accelerator_memory
 
 
 # The basic distance math should stay predictable, including awkward inputs.
@@ -165,7 +165,7 @@ class MemoryCleanupTests(unittest.TestCase):
             patch.dict(sys.modules, {'torch': fake_torch}),
             patch('sparc.utils.memory.gc.collect') as collect,
         ):
-            release_cuda_memory()
+            release_accelerator_memory()
 
         collect.assert_called_once_with()
         fake_cuda.empty_cache.assert_called_once_with()
@@ -175,7 +175,7 @@ class MemoryCleanupTests(unittest.TestCase):
             patch.dict(sys.modules, {'torch': None}),
             patch('sparc.utils.memory.gc.collect') as collect,
         ):
-            release_cuda_memory()
+            release_accelerator_memory()
 
         collect.assert_called_once_with()
 

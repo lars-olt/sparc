@@ -3,6 +3,7 @@
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, Tuple
 from enum import Enum
+from ..utils.device import DEVICES
 
 
 class SegmentationBackend(Enum):
@@ -17,6 +18,27 @@ class ROIBackend(Enum):
 
 
 @dataclass
+class AlignmentConfig:
+    """Stereo alignment. RoMa is optional and loaded only when selected."""
+
+    method: str = 'homography'
+    device: str = 'auto'
+    certainty_threshold: float = 0.5
+    cycle_tolerance: float = 3.0
+
+    def validate(self):
+        import math
+        if self.method not in ('homography', 'roma'):
+            raise ValueError(f'Unknown alignment method: {self.method}')
+        if self.device not in DEVICES:
+            raise ValueError(f'Unknown alignment device: {self.device}')
+        if not math.isfinite(self.certainty_threshold) or not 0 <= self.certainty_threshold <= 1:
+            raise ValueError('certainty_threshold must be between 0 and 1')
+        if not math.isfinite(self.cycle_tolerance) or self.cycle_tolerance < 0:
+            raise ValueError('cycle_tolerance must be finite and nonnegative')
+
+
+@dataclass
 class LoadConfig:
     iof_path:         str
     instrument:       str                        = "ZCAM"
@@ -25,6 +47,7 @@ class LoadConfig:
     do_apply_pixmaps: bool                       = True
     ignore_bayers:    bool                       = False
     rgb_bands:        Optional[Tuple[str,str,str]] = None
+    alignment:        AlignmentConfig = field(default_factory=AlignmentConfig)
 
 
 @dataclass
@@ -58,6 +81,7 @@ class SegmentConfig:
     points_per_side:     int                 = 32
     pred_iou_thresh:     float               = 0.88
     model_type:          Optional[str]       = None
+    device:              Optional[str]       = None
 
 
 @dataclass
@@ -102,14 +126,21 @@ class SparcConfig:
     performance: PerformanceConfig = field(default_factory=PerformanceConfig)
 
     def validate(self):
+        self.load.alignment.validate()
+        if self.segment.device is not None and self.segment.device not in DEVICES:
+            raise ValueError(f'Unknown segmentation device: {self.segment.device}')
         if self.roi.backend == ROIBackend.THREADED and self.performance.n_threads is None:
             import psutil
             self.performance.n_threads = max(1, psutil.cpu_count(logical=False) - 1)
 
-        if self.segment.backend in (SegmentationBackend.GPU, SegmentationBackend.OPTIMIZED):
+        if (self.segment.device is not None
+                or self.segment.backend in (SegmentationBackend.GPU, SegmentationBackend.OPTIMIZED)):
             try:
-                import torch
-                if not torch.cuda.is_available():
-                    self.segment.backend = SegmentationBackend.CPU
+                from ..utils.device import resolve_device
+                device = resolve_device(self.segment.device or 'auto')
+                self.segment.backend = (SegmentationBackend.CPU if device.type == 'cpu'
+                                        else SegmentationBackend.GPU)
             except ImportError:
+                if self.segment.device in ('cuda', 'mps'):
+                    raise
                 self.segment.backend = SegmentationBackend.CPU

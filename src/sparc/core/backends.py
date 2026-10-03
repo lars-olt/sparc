@@ -40,7 +40,8 @@ def dispatch_segmentation(model_path: str,
         use_gpu=use_gpu,
         preserve_background=kwargs.get('preserve_background', False),
         points_per_side=kwargs.get('points_per_side', 32),
-        pred_iou_thresh=kwargs.get('pred_iou_thresh', 0.88)
+        pred_iou_thresh=kwargs.get('pred_iou_thresh', 0.88),
+        device=kwargs.get('device'),
     )
 
 

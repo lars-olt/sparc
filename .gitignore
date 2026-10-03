@@ -19,3 +19,10 @@ demo (summary products).ipynb
 tree.txt
 test_wavelength_filter.ipynb
 test_windows_stem_fix.py
+/notebook_outputs/
+homography_playground.ipynb
+
+# Local RoMa experiment
+/roistudio_roma_batch.ipynb
+/notebook_support/
+/sparc-results/

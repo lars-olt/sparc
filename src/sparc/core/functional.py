@@ -48,6 +48,13 @@ def run_sparc_from_load_result(load_result: Dict[str, Any],
     config.validate()
 
     instrument        = load_result.get('instrument', 'ZCAM')
+    from dataclasses import asdict
+    if config.load.alignment.method == 'roma' and (
+        load_result.get('alignment_method') != 'roma'
+        or load_result.get('alignment_config') != asdict(config.load.alignment)
+    ):
+        from ..data.alignment import align_loaded_scene
+        load_result = align_loaded_scene(load_result, config.load.alignment)
     instrument_config = get_instrument_config(instrument)
     instrument_config['wavelengths'] = load_result['bandset']._sparc_wavelengths
 
