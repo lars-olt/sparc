@@ -17,6 +17,27 @@ The pipeline code is in `src/sparc/core`:
 
 For RoMa, follow [Experimental RoMa](#experimental-roma) instead of the standard setup below.
 
+### Install the source tools
+
+Install [Git](https://git-scm.com/downloads), then install
+[uv](https://docs.astral.sh/uv/getting-started/installation/) using the command for
+your platform. Skip this if `git --version` and `uv --version` already work.
+uv will download Python 3.11 when it creates the environment.
+
+**Windows (PowerShell):**
+
+```powershell
+winget install --id astral-sh.uv -e
+```
+
+**macOS (Terminal):**
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Reopen your terminal after installation and check `uv --version` before continuing.
+
 ### 1. Clone and install
 
 ```bash
@@ -32,6 +53,11 @@ To run segmentation and spectral clustering, install the algorithm dependencies:
 ```bash
 uv sync --extra algorithm
 ```
+
+Before running Python commands, activate the environment from `sparc`:
+
+- Windows (PowerShell): `.\.venv\Scripts\Activate.ps1`
+- macOS (Terminal): `source .venv/bin/activate`
 
 For projects that use SPARC as a dependency:
 
@@ -60,21 +86,20 @@ Download `sam_vit_h_4b8939.pth` from the [Segment Anything repository](https://g
 ## Experimental RoMa
 
 RoMa is an experimental alternative to homography for aligning the left and
-right images. SPARC handles the matching and maps ROIs into inscribed
-rectangles in the other eye. ROIStudio uses this same implementation.
+right images. SPARC handles the matching and maps ROIs into inscribed rectangles in the
+other eye. ROIStudio uses this same implementation.
 
-This setup supports **Windows (64-bit), with CPU or NVIDIA CUDA**, and
-**Apple Silicon macOS, with CPU or MPS**. Intel Macs cannot use this setup:
-[official PyTorch wheels for Intel Macs ended after 2.2](https://dev-discuss.pytorch.org/t/pytorch-macos-x86-builds-deprecation-starting-january-2024/1690),
-and RoMa needs a newer version.
+Supported platforms are **64-bit Windows (CPU or NVIDIA CUDA)** and **Apple
+Silicon macOS (CPU or MPS)**. On Apple Silicon, use a native ARM64 terminal,
+without Rosetta. Intel Macs lack the required PyTorch wheels; see the
+[PyTorch support notice](https://dev-discuss.pytorch.org/t/pytorch-macos-x86-builds-deprecation-starting-january-2024/1690).
 
-### 1. Set up the environment
+For a new setup, first [install Git and uv](#install-the-source-tools), then follow
+the steps below. If RoMa already works, go straight to [launching](#5-launch-with-roma).
 
-Install [Git](https://git-scm.com/downloads) and
-[uv](https://docs.astral.sh/uv/getting-started/installation/), then open PowerShell
-on Windows or Terminal on macOS. Use these instructions instead of the standard
-installation above. uv creates a Python 3.11 environment in `.venv` and downloads
-Python if needed. On Apple Silicon, use a native ARM64 terminal, without Rosetta.
+### 1. Create and activate the environment
+
+Clone the source and install the pipeline dependencies:
 
 ```bash
 git clone https://github.com/lars-olt/sparc.git
@@ -82,17 +107,40 @@ cd sparc
 uv sync --python 3.11 --extra algorithm --inexact --no-install-package torch --no-install-package torchvision
 ```
 
-For an existing source installation, skip cloning, open the `sparc` directory,
-and run the `uv sync` command above to reuse its Python 3.11 `.venv`. Deactivate
-any other environment before following these steps. `--inexact` keeps additional
-packages you have installed.
+For an existing source installation, close any running app, skip cloning, and
+run the `uv sync` command from `sparc` to reuse its Python 3.11 `.venv`.
+`--inexact` keeps extra packages. PyTorch is installed separately in the next
+step because RoMa needs a newer version than the standard environment.
 
-The command installs the pipeline dependencies but leaves PyTorch for the next
-step. The standard environment pins an older PyTorch version; RoMa uses 2.6.
+Activate `.venv` from the repository directory:
+
+**Windows (PowerShell):**
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+**macOS (Terminal):**
+
+```bash
+source .venv/bin/activate
+```
+
+If PowerShell blocks activation, run
+`Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned` and try again.
+This applies only to the current terminal.
+
+Keep this terminal open for the remaining steps. Check which Python is active:
+
+```bash
+python -c "import sys; print(sys.executable)"
+```
+
+The path must point inside this repository’s `.venv`.
 
 ### 2. Install PyTorch
 
-Run **one** of these commands from the same directory:
+Run **one** command for your platform:
 
 **Windows — CPU:**
 
@@ -100,70 +148,93 @@ Run **one** of these commands from the same directory:
 uv pip install --python .venv --reinstall "numpy<2" torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cpu
 ```
 
-**Windows — NVIDIA GPU:** use this with a CUDA-compatible GPU and an up-to-date
-NVIDIA driver. The wheel includes the CUDA runtime.
+**Windows — NVIDIA GPU:** requires a compatible GPU and an up-to-date NVIDIA
+driver. The wheel includes the CUDA runtime.
 
 ```bash
 uv pip install --python .venv --reinstall "numpy<2" torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu124
 ```
 
-**macOS — Apple Silicon:** the same build supports CPU and MPS.
+**macOS — Apple Silicon:** supports both CPU and MPS.
 
 ```bash
 uv pip install --python .venv --reinstall "numpy<2" torch==2.6.0 torchvision==0.21.0
 ```
 
-These are the [PyTorch 2.6 installation builds](https://pytorch.org/get-started/previous-versions/#v260).
-`--reinstall` also handles switching an existing installation between CPU and CUDA.
+These use the [PyTorch 2.6 builds](https://pytorch.org/get-started/previous-versions/#v260).
+`--reinstall` also handles switching an existing environment between CPU and CUDA.
 
 ### 3. Install requirements-roma.txt (required)
 
-From the `sparc` directory, run this command on Windows or macOS to install
-RoMa and its dependencies into `sparc/.venv`:
+From `sparc`, install RoMa into the same `.venv`:
 
 ```bash
 uv pip install --python .venv -r requirements-roma.txt
 ```
 
-Complete this step after installing PyTorch, including when updating an existing
-environment. Wait for the installation to succeed before continuing.
-
-### 4. Check and run
-
-Check the Python path, RoMa import, and selected device. The printed Python
-path should be inside this checkout’s `sparc/.venv`:
+Wait for installation to finish, then verify the import and selected device:
 
 ```bash
-uv run --no-sync python -c "import sys; print('Python:', sys.executable); from romatch import roma_outdoor; from sparc.utils.device import resolve_device; print('RoMa device:', resolve_device('auto'))"
+python -c "from romatch import roma_outdoor; from sparc.utils.device import resolve_device; print('RoMa device:', resolve_device('auto'))"
 ```
 
-`auto` chooses CUDA, then MPS, then CPU. Use `--device cpu` to run without a GPU,
-`--device cuda` for an NVIDIA GPU, or `--device mps` for an Apple Silicon GPU.
-If the check reports `cpu` when you expected a GPU, check the PyTorch build and
-driver or macOS support before running. An explicitly requested unavailable GPU
-raises an error. Unsupported MPS operations can fall back to CPU.
+### 4. Prepare the model weights
 
-Download `sam_vit_h_4b8939.pth` from
+**SAM:** download `sam_vit_h_4b8939.pth` from
 [Segment Anything](https://github.com/facebookresearch/segment-anything#model-checkpoints)
-if you do not already have it. Run the full pipeline, replacing the two input
-paths with your image folder and checkpoint:
+and keep it in a permanent location. This checkpoint is required for automatic
+ROI generation. Reuse your existing file if you already have it.
+
+**RoMa:** the `roma_outdoor.pth` and `dinov2_vitl14_pretrain.pth` weights are
+required, but download automatically when RoMa first loads a scene. Allow internet
+access and several gigabytes of disk space for this first run. Installing
+`requirements-roma.txt` installs the software; the weight download happens later.
+
+PyTorch caches the weights outside `.venv`, normally in
+`~/.cache/torch/hub/checkpoints` (`~` is your user folder). Existing weights in
+that cache are reused across environments for the same user. To see the actual
+cache folder, including any `TORCH_HOME` override, run:
 
 ```bash
-uv run --no-sync python -m sparc --input "path/to/iof" --sam-path "path/to/sam_vit_h_4b8939.pth" --alignment roma --device auto --obs-index 0 --output "sparc-results/roma-scene"
+python -c "from pathlib import Path; import torch; print(Path(torch.hub.get_dir()) / 'checkpoints')"
 ```
 
-RoMa downloads its own weights on first use, so the first run needs internet
-access and takes longer. The output folder must be new; it will contain the
-overview image, spectra, ROIs, and run settings. See [Terminal use](#terminal-use)
-for scene selection and YAML configuration.
+To download and check RoMa’s weights before launching, or before going offline,
+run this once while connected. It uses CPU and reuses cached files:
 
-For the desktop interface, follow the
-[ROIStudio RoMa setup](https://github.com/lars-olt/roistudio#experimental-roma).
-Its environment includes SPARC and can run both the GUI and terminal pipeline.
+```bash
+python -c "from romatch import roma_outdoor; roma_outdoor(device='cpu', use_custom_corr=False); print('RoMa weights ready')"
+```
 
-**Keep `--no-sync` when launching.** A plain `uv run` or `uv sync` restores the
-standard dependency pins and can remove RoMa or downgrade PyTorch. If that
-happens, repeat steps 2 and 3. You can also activate `.venv` and run `python` directly.
+Wait for `RoMa weights ready`. The local-correlation warning on Windows and macOS
+is expected and does not prevent setup.
+
+### 5. Launch with RoMa
+
+From `sparc`, with `.venv` active, replace the two input paths with your image
+folder and SAM checkpoint:
+
+```bash
+python -m sparc --input "path/to/iof" --sam-path "path/to/sam_vit_h_4b8939.pth" --alignment roma --device auto --obs-index 0 --output "sparc-results/roma-scene"
+```
+
+`auto` chooses CUDA, then MPS, then CPU. Use `--device cpu`, `--device cuda`, or
+`--device mps` to choose explicitly. An unavailable requested GPU raises an error;
+unsupported MPS operations can fall back to CPU.
+
+The output folder must be new. It will contain the overview image, spectra, ROIs,
+and settings. See [Terminal use](#terminal-use) for scene selection and YAML
+configuration. For the GUI, follow the
+[ROIStudio setup](https://github.com/lars-olt/roistudio#experimental-roma).
+
+**On later launches:** open a terminal in the repository, activate `.venv` using
+the command in step 1, and run the launch command above. Dependencies and cached
+weights do not need reinstalling. Run `deactivate` when finished.
+
+If you prefer to skip activation, use `uv run --no-sync python` in place of
+`python`. Always include `--no-sync`: plain `uv run` or `uv sync` can restore the
+standard pins and remove RoMa or downgrade PyTorch. If that happens, repeat
+steps 2 and 3.
 
 ## Quick Start
 
@@ -229,11 +300,11 @@ result = run_sparc(
 
 ### Terminal use
 
-Run a scene from the terminal with `python -m sparc`. The `sparc` command is also
+With `.venv` active, run a scene from the terminal with `python -m sparc`. The `sparc` command is also
 available after installing the package. Use `--help` to list the options.
 
 ```powershell
-uv run --no-sync python -m sparc --input "path/to/iof" --sam-path "path/to/sam_vit_h_4b8939.pth" --alignment roma --device auto --obs-index 0 --output "sparc-results/roma-scene"
+python -m sparc --input "path/to/iof" --sam-path "path/to/sam_vit_h_4b8939.pth" --alignment roma --device auto --obs-index 0 --output "sparc-results/roma-scene"
 ```
 
 `--obs-index` is the zero-based pointing index, using the same grouping as
@@ -246,8 +317,8 @@ Homography is the default alignment.
 For more settings, use [examples/roma.yml](examples/roma.yml):
 
 ```powershell
-uv run --no-sync python -m sparc --config examples/roma.yml --input "path/to/iof" --sam-path "path/to/sam_vit_h_4b8939.pth"
-uv run --no-sync python -m sparc --config examples/roma.yml --roma-certainty 0.6 --print-config
+python -m sparc --config examples/roma.yml --input "path/to/iof" --sam-path "path/to/sam_vit_h_4b8939.pth"
+python -m sparc --config examples/roma.yml --roma-certainty 0.6 --print-config
 ```
 
 Command-line options override the YAML file. `--print-config` shows the settings
